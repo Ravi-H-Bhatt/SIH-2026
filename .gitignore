@@ -1,0 +1,89 @@
+# ============================================================================
+# SIH 26188 — root .gitignore
+# ============================================================================
+
+# --- Credentials & secrets (NEVER commit these) ---
+.env
+.env.*
+!.env.example
+# NOTE: a blanket `*.json` used to live here. It also excluded package.json,
+# package-lock.json and tsconfig.json, which would have made the repo
+# un-installable after clone. Only credential-shaped JSON is ignored now.
+service-account*.json
+google-credentials*.json
+gcp-*.json
+*-key.json
+*_key.json
+credentials.json
+secrets.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+*.so
+
+# --- ML model weights & large assets ---
+*.pt
+*.pth
+*.h5
+*.pkl
+*.bin
+*.safetensors
+*.pb
+# ONNX is ignored by default, but the two vendored OpenCV face models are
+# required at runtime (cv2.FaceDetectorYN / cv2.FaceRecognizerSF) and are only
+# a few MB, so they are tracked deliberately.
+*.onnx
+!backend/app/services/face/face_detection_yunet.onnx
+!backend/app/services/face/face_recognition_sface.onnx
+
+# --- Data (raw/processed datasets stay out of Git) ---
+data/raw/
+data/processed/
+uploads/
+
+# --- Node / Next.js ---
+node_modules/
+.next/
+out/
+build/
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+*.tsbuildinfo
+next-env.d.ts
+
+# --- SQLite dev DB ---
+*.db
+*.sqlite
+*.sqlite3
+
+# --- macOS ---
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# --- IDEs ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Logs ---
+*.log
+logs/

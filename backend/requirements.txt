@@ -1,0 +1,59 @@
+# ============================================================================
+# Backend runtime dependencies
+# ============================================================================
+# Deliberately slim. Everything here is actually imported by app/ — verified,
+# not aspirational. Keeping this lean is what makes the API deployable to a
+# serverless target (see docs/DEPLOYMENT.md).
+#
+# Removed 2026-09 after an import audit found them unreferenced by app/:
+#   paddlepaddle, paddleocr  -> OCR runs through Google Cloud Vision (HTTP) or
+#                               Tesseract/Apple Vision. ~700 MB saved.
+#   insightface, onnxruntime -> face detection/recognition uses OpenCV's own
+#                               ONNX importer (cv2.FaceDetectorYN /
+#                               cv2.FaceRecognizerSF) with the vendored
+#                               .onnx models. ~250 MB saved.
+#   scikit-image             -> no `skimage` import anywhere.
+# ============================================================================
+
+# ─── Web framework ───
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+python-multipart==0.0.9
+
+# ─── Database (Supabase Postgres) ───
+sqlalchemy==2.0.35
+psycopg[binary]==3.3.5
+
+# ─── Config & validation ───
+pydantic[email]==2.9.0
+pydantic-settings==2.5.0
+python-dotenv==1.0.1
+
+# ─── Auth ───
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# ─── Imaging / CV ───
+# opencv-python-headless: same API as opencv-python without the GUI/GTK stack,
+# which is both smaller and the correct choice on a headless server.
+Pillow==10.4.0
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+scipy==1.14.1
+
+# ─── Identity graph ───
+networkx==3.3
+
+# ─── HTTP clients ───
+httpx==0.27.0
+aiofiles==24.1.0
+
+# ─── Google Cloud Vision OCR ───
+# Auth via GOOGLE_APPLICATION_CREDENTIALS (service-account JSON path) or an
+# API key in GOOGLE_VISION_API_KEY. Never commit the service-account file.
+google-cloud-vision==3.7.2
+google-auth==2.29.0
+
+# ─── Optional: local OCR fallback (OCR_PROVIDER=local) ───
+# Needs the Tesseract binary too: `brew install tesseract`
+pytesseract==0.3.13
