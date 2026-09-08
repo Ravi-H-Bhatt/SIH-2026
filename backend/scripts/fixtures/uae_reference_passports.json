@@ -1,0 +1,172 @@
+{
+  "_source": "15 synthetic UAE passport images (WhatsApp 2026-09-08), OCR'd via Google Cloud Vision",
+  "_mrz_format": "non_icao_simplified \u2014 docno + ISO3 + DDMMYYYY dob + sex + DDMMYYYY expiry, NO check digits",
+  "_warning": "SYNTHETIC TEST DATA. Not real travellers. MRZ has no check digits so it cannot be cryptographically verified.",
+  "records": [
+    {
+      "holder_name": "AHMAD AL FARSI",
+      "surname": "FARSI",
+      "given_names": "AHMAD AL",
+      "document_number": "Z43R34255",
+      "issuing_country": "ARE",
+      "date_of_birth": "1978-07-03",
+      "sex": "M",
+      "expiry_date": "2020-02-10",
+      "file": "WhatsApp Image 2026-09-08 at 20.09.11.jpeg"
+    },
+    {
+      "holder_name": "KHALED AL HASHIMI",
+      "surname": "HASHIMI",
+      "given_names": "KHALED AL",
+      "document_number": "Y34B67890",
+      "issuing_country": "ARE",
+      "date_of_birth": "1990-05-14",
+      "sex": "M",
+      "expiry_date": "2022-07-05",
+      "file": "WhatsApp Image 2026-09-08 at 20.09.12 (1).jpeg"
+    },
+    {
+      "holder_name": "NASSER AL ZAHRANI",
+      "surname": "ZAHRANI",
+      "given_names": "NASSER AL",
+      "document_number": "C56C12345",
+      "issuing_country": "ARE",
+      "date_of_birth": "1982-01-30",
+      "sex": "M",
+      "expiry_date": "2023-08-12",
+      "file": "WhatsApp Image 2026-09-08 at 20.09.12 (2).jpeg"
+    },
+    {
+      "holder_name": "MOHAMED AL BINSAID",
+      "surname": "BINSAID",
+      "given_names": "MOHAMED AL",
+      "document_number": "K78D45678",
+      "issuing_country": "ARE",
+      "date_of_birth": "1995-09-18",
+      "sex": "M",
+      "expiry_date": "2024-01-20",
+      "file": "WhatsApp Image 2026-09-08 at 20.09.12 (3).jpeg"
+    },
+    {
+      "holder_name": "SALEH AL ALI",
+      "surname": "ALI",
+      "given_names": "SALEH AL",
+      "document_number": "X12A45678",
+      "issuing_country": "ARE",
+      "date_of_birth": "1985-11-21",
+      "sex": "M",
+      "expiry_date": "2021-03-15",
+      "file": "WhatsApp Image 2026-09-08 at 20.09.12.jpeg"
+    },
+    {
+      "holder_name": "HUSSEIN AL ALAWADH",
+      "surname": "ALAWADH",
+      "given_names": "HUSSEIN AL",
+      "document_number": "V12F34567",
+      "issuing_country": "ARE",
+      "date_of_birth": "1988-06-09",
+      "sex": "M",
+      "expiry_date": "2026-11-22",
+      "file": "WhatsApp Image 2026-09-08 at 20.09.13 (1).jpeg"
+    },
+    {
+      "holder_name": "MAJID AL SHAMSI",
+      "surname": "SHAMSI",
+      "given_names": "MAJID AL",
+      "document_number": "Q34G56789",
+      "issuing_country": "ARE",
+      "date_of_birth": "1983-03-27",
+      "sex": "M",
+      "expiry_date": "2022-04-14",
+      "file": "WhatsApp Image 2026-09-08 at 20.09.13 (2).jpeg"
+    },
+    {
+      "holder_name": "TAREQ AL MAZROUI",
+      "surname": "MAZROUI",
+      "given_names": "TAREQ AL",
+      "document_number": "M56H12345",
+      "issuing_country": "ARE",
+      "date_of_birth": "1981-12-15",
+      "sex": "M",
+      "expiry_date": "2021-05-03",
+      "file": "WhatsApp Image 2026-09-08 at 20.09.13 (3).jpeg"
+    },
+    {
+      "holder_name": "ABDULLAH AL ALKINDI",
+      "surname": "ALKINDI",
+      "given_names": "ABDULLAH AL",
+      "document_number": "Z90E56789",
+      "issuing_country": "ARE",
+      "date_of_birth": "1999-02-11",
+      "sex": "M",
+      "expiry_date": "2025-10-02",
+      "file": "WhatsApp Image 2026-09-08 at 20.09.13.jpeg"
+    },
+    {
+      "holder_name": "LAYLA AL MANSOURI",
+      "surname": "MANSOURI",
+      "given_names": "LAYLA AL",
+      "document_number": "Z54R76423",
+      "issuing_country": "ARE",
+      "date_of_birth": "1989-11-24",
+      "sex": "F",
+      "expiry_date": "2018-06-16",
+      "file": "WhatsApp Image 2026-09-08 at 20.09.14 (1).jpeg"
+    },
+    {
+      "holder_name": "NOURA AL NAIMI",
+      "surname": "NAIMI",
+      "given_names": "NOURA AL",
+      "document_number": "U12N34567",
+      "issuing_country": "ARE",
+      "date_of_birth": "1996-12-11",
+      "sex": "F",
+      "expiry_date": "2024-07-07",
+      "file": "WhatsApp Image 2026-09-08 at 20.09.14 (2).jpeg"
+    },
+    {
+      "holder_name": "REEM AL ALZAHERI",
+      "surname": "ALZAHERI",
+      "given_names": "REEM AL",
+      "document_number": "I56Q12345",
+      "issuing_country": "ARE",
+      "date_of_birth": "1983-02-09",
+      "sex": "F",
+      "expiry_date": "2026-10-21",
+      "file": "WhatsApp Image 2026-09-08 at 20.09.14 (3).jpeg"
+    },
+    {
+      "holder_name": "SAEED AL BALOOSHI",
+      "surname": "BALOOSHI",
+      "given_names": "SAEED AL",
+      "document_number": "L78123456",
+      "issuing_country": "ARE",
+      "date_of_birth": "1987-08-05",
+      "sex": "M",
+      "expiry_date": "2023-06-07",
+      "file": "WhatsApp Image 2026-09-08 at 20.09.14.jpeg"
+    },
+    {
+      "holder_name": "LIAN AL GHAMDI",
+      "surname": "GHAMDI",
+      "given_names": "LIAN AL",
+      "document_number": "K12T34567",
+      "issuing_country": "ARE",
+      "date_of_birth": "1986-05-19",
+      "sex": "F",
+      "expiry_date": "2023-04-09",
+      "file": "WhatsApp Image 2026-09-08 at 20.09.15 (1).jpeg"
+    },
+    {
+      "holder_name": "HUDA AL BINNASSER",
+      "surname": "BINNASSER",
+      "given_names": "HUDA AL",
+      "document_number": "P90S12345",
+      "issuing_country": "ARE",
+      "date_of_birth": "1987-07-27",
+      "sex": "F",
+      "expiry_date": "2021-01-12",
+      "file": "WhatsApp Image 2026-09-08 at 20.09.15.jpeg"
+    }
+  ]
+}
