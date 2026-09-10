@@ -28,5 +28,13 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     def should_auto_approve(self) -> bool:
-        """Check if user should be auto-approved based on env settings."""
-        return os.getenv("AUTO_APPROVE_USERS", "true").lower() == "true"
+        """
+        Whether a newly created account is pre-approved.
+
+        Reads `settings`, not os.getenv: pydantic-settings does not export .env
+        into the process environment, so the old os.getenv call always returned
+        its "true" default and silently approved everyone.
+        """
+        from app.core.config import settings
+
+        return settings.AUTO_APPROVE_USERS

@@ -235,13 +235,13 @@ export default function DashboardPage() {
                     {scan.id.substring(0, 8)}...
                   </td>
                   <td style={{ padding: "16px 24px", color: "#F8FAFC", textTransform: "uppercase", fontWeight: 500 }}>
-                    {scan.document_type || "Passport"}
+                    {scan.document_type || "—"}
                   </td>
                   <td style={{ padding: "16px 24px", color: "#CBD5E1", fontFamily: "monospace" }}>
                     {scan.document_number || "A12345678"}
                   </td>
                   <td style={{ padding: "16px 24px", color: "#F8FAFC" }}>
-                    {scan.holder_name || "JOHN DOE"}
+                    {scan.holder_name || "NOT READ"}
                   </td>
                   <td style={{ padding: "16px 24px" }}>
                     {getRiskBadge(scan.risk_score?.level || "low")}

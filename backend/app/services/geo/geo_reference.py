@@ -83,6 +83,51 @@ COUNTRY_NAMES: Dict[str, str] = {
 }
 
 
+# Nationality adjectives as printed in the visual inspection zone. Passports
+# state nationality in words ("INDIAN", "BRITISH CITIZEN"), not as ISO codes, so
+# resolving the code from the document requires this mapping.
+#
+# Without it the OCR layer defaulted nationality and issuing_country to "IND"
+# for every non-MRZ document, which meant a US or Thai passport read via the
+# visual path was recorded as Indian — and then geolocated to India on the
+# operations map.
+NATIONALITY_TO_ALPHA3: Dict[str, str] = {
+    "AFGHAN": "AFG", "EMIRATI": "ARE", "ARGENTINE": "ARG", "ARGENTINIAN": "ARG",
+    "AUSTRALIAN": "AUS", "AUSTRIAN": "AUT", "BANGLADESHI": "BGD",
+    "BELGIAN": "BEL", "BRAZILIAN": "BRA", "BHUTANESE": "BTN",
+    "CANADIAN": "CAN", "SWISS": "CHE", "CHINESE": "CHN", "GERMAN": "DEU",
+    "DANISH": "DNK", "EGYPTIAN": "EGY", "SPANISH": "ESP", "FRENCH": "FRA",
+    "BRITISH": "GBR", "BRITISH CITIZEN": "GBR", "INDONESIAN": "IDN",
+    "INDIAN": "IND", "IRANIAN": "IRN", "IRAQI": "IRQ", "ITALIAN": "ITA",
+    "JAPANESE": "JPN", "KENYAN": "KEN", "KOREAN": "KOR",
+    "SRI LANKAN": "LKA", "SRILANKAN": "LKA", "BURMESE": "MMR",
+    "MYANMAR": "MMR", "MALAYSIAN": "MYS", "NIGERIAN": "NGA", "DUTCH": "NLD",
+    "NETHERLANDS": "NLD", "NEPALESE": "NPL", "NEPALI": "NPL",
+    "NEW ZEALANDER": "NZL", "PAKISTANI": "PAK", "FILIPINO": "PHL",
+    "PHILIPPINE": "PHL", "POLISH": "POL", "QATARI": "QAT", "RUSSIAN": "RUS",
+    "SAUDI": "SAU", "SAUDI ARABIAN": "SAU", "SINGAPOREAN": "SGP",
+    "SWEDISH": "SWE", "THAI": "THA", "TURKISH": "TUR", "UKRAINIAN": "UKR",
+    "AMERICAN": "USA", "VIETNAMESE": "VNM", "SOUTH AFRICAN": "ZAF",
+}
+
+# Country name -> ISO-3, inverted from COUNTRY_NAMES plus common variants.
+NAME_TO_ALPHA3: Dict[str, str] = {name.upper(): code for code, name in COUNTRY_NAMES.items()}
+NAME_TO_ALPHA3.update({
+    "REPUBLIC OF INDIA": "IND",
+    "BHARAT": "IND",
+    "UNITED STATES OF AMERICA": "USA",
+    "GREAT BRITAIN": "GBR",
+    "UNITED KINGDOM OF GREAT BRITAIN AND NORTHERN IRELAND": "GBR",
+    "KOREA": "KOR",
+    "REPUBLIC OF KOREA": "KOR",
+    "UAE": "ARE",
+    "KINGDOM OF SAUDI ARABIA": "SAU",
+    "RUSSIAN FEDERATION": "RUS",
+    "SOCIALIST REPUBLIC OF VIET NAM": "VNM",
+    "VIET NAM": "VNM",
+})
+
+
 class GeoReference:
     def normalize(self, code: Optional[str]) -> Optional[str]:
         if not code:
@@ -91,6 +136,36 @@ class GeoReference:
         if len(clean) == 2:
             clean = ALPHA2_TO_ALPHA3.get(clean, clean)
         return clean if clean in COUNTRY_CENTROIDS else None
+
+    def resolve_from_text(self, text: Optional[str]) -> Optional[str]:
+        """
+        Best-effort ISO-3 country code from free document text.
+
+        Tries, in order: an explicit alpha-3 code, a nationality adjective, then
+        a country name. Returns None when nothing matches — the caller must
+        treat that as "unknown", never as a default country.
+        """
+        if not text:
+            return None
+
+        upper = str(text).upper()
+
+        # Explicit alpha-3 already present and known.
+        direct = self.normalize(text.strip())
+        if direct:
+            return direct
+
+        # Longest match first so "SOUTH AFRICAN" wins over "AFRICAN" fragments
+        # and "SAUDI ARABIAN" over "SAUDI".
+        for adjective in sorted(NATIONALITY_TO_ALPHA3, key=len, reverse=True):
+            if adjective in upper:
+                return NATIONALITY_TO_ALPHA3[adjective]
+
+        for name in sorted(NAME_TO_ALPHA3, key=len, reverse=True):
+            if name in upper:
+                return NAME_TO_ALPHA3[name]
+
+        return None
 
     def coordinates_for_country(self, code: Optional[str]) -> Optional[Tuple[float, float]]:
         """Returns the country centroid, or None for an unknown/unreadable code."""

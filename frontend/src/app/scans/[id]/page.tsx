@@ -6,6 +6,91 @@ import { scansApi, apiClient } from "@/lib/api";
 import { ScanRecord, ContradictionItem, FraudPatternMatch } from "@/types";
 import LocationMap from "@/components/LocationMap";
 
+/**
+ * Colour scheme per contradiction-matrix status.
+ *
+ * The badge used to be a binary `isContradiction ? red : green`, so an ALERT
+ * row and a NOT_PERFORMED row both rendered in PASS green — an officer scanning
+ * the status column saw green next to a failed MRZ check and a skipped biometric.
+ */
+const STATUS_STYLES: Record<
+  string,
+  { text: string; bg: string; border: string; row: string; finding: string }
+> = {
+  PASS: {
+    text: "#34D399",
+    bg: "rgba(16, 185, 129, 0.2)",
+    border: "rgba(16, 185, 129, 0.4)",
+    row: "transparent",
+    finding: "#94A3B8",
+  },
+  ALERT: {
+    text: "#FBBF24",
+    bg: "rgba(245, 158, 11, 0.2)",
+    border: "rgba(245, 158, 11, 0.45)",
+    row: "rgba(245, 158, 11, 0.07)",
+    finding: "#FCD34D",
+  },
+  CONTRADICTION: {
+    text: "#EF4444",
+    bg: "rgba(239, 68, 68, 0.25)",
+    border: "rgba(239, 68, 68, 0.5)",
+    row: "rgba(239, 68, 68, 0.08)",
+    finding: "#FCA5A5",
+  },
+  NOT_PERFORMED: {
+    text: "#94A3B8",
+    bg: "rgba(148, 163, 184, 0.15)",
+    border: "rgba(148, 163, 184, 0.35)",
+    row: "rgba(148, 163, 184, 0.05)",
+    finding: "#94A3B8",
+  },
+};
+
+function statusStyle(status?: string) {
+  return STATUS_STYLES[String(status || "").toUpperCase()] || STATUS_STYLES.NOT_PERFORMED;
+}
+
+/**
+ * Renders a document field, or an explicit "NOT READ" marker when the backend
+ * has no value for it.
+ *
+ * This exists because the panel previously used `||` fallbacks to plausible
+ * sample data ("JOHN DOE", "P12345678", "2031-10-15"). An officer looking at a
+ * failed scan saw a complete passport that had never been read. A blank is
+ * recoverable; a fabricated value that looks real is not.
+ */
+function FieldValue({ value, mono = false }: { value?: string | null; mono?: boolean }) {
+  const missing =
+    value === null ||
+    value === undefined ||
+    value === "" ||
+    ["TRAVELER", "TRAVELLER", "NOT_DETECTED", "UNKNOWN", "UNREADABLE NAME"].includes(
+      String(value).toUpperCase()
+    );
+
+  if (missing) {
+    return (
+      <p style={{ color: "#F87171", fontWeight: 600, margin: "2px 0 0", fontSize: "12px" }}>
+        ⚠ NOT READ
+      </p>
+    );
+  }
+
+  return (
+    <p
+      style={{
+        color: "#F8FAFC",
+        fontWeight: 600,
+        margin: "2px 0 0",
+        fontFamily: mono ? "monospace" : undefined,
+      }}
+    >
+      {value}
+    </p>
+  );
+}
+
 export default function ScanDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -96,6 +181,12 @@ export default function ScanDetailPage() {
   const fraudPatterns: FraudPatternMatch[] = scan.risk_score?.fraud_patterns_matched || [];
   const canonicalHash = scan.canonical_hash || scan.risk_score?.canonical_hash;
 
+  // Real decoded MRZ lines only. Empty means the MRZ was not read, which the
+  // panel states explicitly instead of rendering a sample TD3 pair.
+  const mrzLines: string[] = (scan.extracted_data?.mrz_lines || []).filter(
+    (line: string) => typeof line === "string" && line.trim().length > 0
+  );
+
   return (
     <div style={{ maxWidth: "1240px", margin: "0 auto", paddingBottom: "60px" }}>
       {/* Top Breadcrumb & Actions Bar */}
@@ -116,7 +207,7 @@ export default function ScanDetailPage() {
             </span>
           </div>
           <span style={{ fontSize: "13px", color: "#94A3B8", fontFamily: "monospace", marginTop: "4px", display: "block" }}>
-            Scan ID: {scan.id} | Encounter: {new Date(scan.created_at).toLocaleString()} | Lane: {scan.checkpoint_id || "DEL-EGATE-01"}
+            Scan ID: {scan.id} | Encounter: {new Date(scan.created_at).toLocaleString()} | Lane: {scan.checkpoint_id || "UNSPECIFIED"}
           </span>
         </div>
 
@@ -128,7 +219,7 @@ export default function ScanDetailPage() {
               {scan.document_type === "passport" ? "ePassport Chip PKI" : "Security Credential"}
             </span>
             <span style={{ fontSize: "13px", fontWeight: 600, color: scan.chip_pki_status === "AUTHENTIC_VALID" ? "#34D399" : (scan.chip_pki_status === "NOT_APPLICABLE" ? "#94A3B8" : "#FBBF24") }}>
-              {scan.chip_pki_status === "NOT_APPLICABLE" ? "STANDARD ID (NO RFID)" : (scan.chip_pki_status || "AUTHENTIC_VALID")}
+              {scan.chip_pki_status === "NOT_APPLICABLE" ? "STANDARD ID (NO RFID)" : (scan.chip_pki_status || "NOT VERIFIED")}
             </span>
           </div>
 
@@ -167,7 +258,7 @@ export default function ScanDetailPage() {
               </span>
             </div>
             <p style={{ margin: "2px 0 0", fontSize: "12px", color: "#94A3B8", fontFamily: "monospace" }}>
-              Digest: {canonicalHash || "8c7d49e1902bb147f7d12f389920aa86cf3891af2209bb45"}
+              Digest: {canonicalHash || "NOT ANCHORED"}
             </p>
           </div>
         </div>
@@ -209,9 +300,34 @@ export default function ScanDetailPage() {
             </p>
           </div>
 
-          <span style={{ fontSize: "12px", color: contradictionMatrix.some(c => c.status === "CONTRADICTION") ? "#EF4444" : "#34D399", fontWeight: 600, backgroundColor: contradictionMatrix.some(c => c.status === "CONTRADICTION") ? "rgba(239, 68, 68, 0.15)" : "rgba(16, 185, 129, 0.15)", padding: "4px 10px", borderRadius: "6px" }}>
-            {contradictionMatrix.some(c => c.status === "CONTRADICTION") ? "⚠️ CONTRADICTIONS DETECTED" : "✓ ALL SIGNALS HARMONIOUS"}
-          </span>
+          {/* Summarises the worst status present, not just CONTRADICTION. This
+              read "ALL SIGNALS HARMONIOUS" in green while rows below were ALERT
+              or NOT_PERFORMED. */}
+          {(() => {
+            const counts = {
+              contradiction: contradictionMatrix.filter(c => c.status === "CONTRADICTION").length,
+              alert: contradictionMatrix.filter(c => c.status === "ALERT").length,
+              skipped: contradictionMatrix.filter(c => c.status === "NOT_PERFORMED").length,
+            };
+            let label = "✓ ALL SIGNALS HARMONIOUS";
+            let key = "PASS";
+            if (counts.contradiction > 0) {
+              label = `⚠️ ${counts.contradiction} CONTRADICTION${counts.contradiction > 1 ? "S" : ""} DETECTED`;
+              key = "CONTRADICTION";
+            } else if (counts.alert > 0) {
+              label = `⚠️ ${counts.alert} ALERT${counts.alert > 1 ? "S" : ""}`;
+              key = "ALERT";
+            } else if (counts.skipped > 0) {
+              label = `${counts.skipped} CHECK${counts.skipped > 1 ? "S" : ""} NOT PERFORMED`;
+              key = "NOT_PERFORMED";
+            }
+            const sv = statusStyle(key);
+            return (
+              <span style={{ fontSize: "12px", color: sv.text, fontWeight: 600, backgroundColor: sv.bg, padding: "4px 10px", borderRadius: "6px", border: `1px solid ${sv.border}`, whiteSpace: "nowrap" }}>
+                {label}
+              </span>
+            );
+          })()}
         </div>
 
         {/* Matrix Table */}
@@ -229,13 +345,13 @@ export default function ScanDetailPage() {
             <tbody>
               {contradictionMatrix.length > 0 ? (
                 contradictionMatrix.map((item, idx) => {
-                  const isContradiction = item.status === "CONTRADICTION";
+                  const sv = statusStyle(item.status);
                   return (
                     <tr
                       key={idx}
                       style={{
                         borderBottom: "1px solid rgba(255,255,255,0.05)",
-                        backgroundColor: isContradiction ? "rgba(239, 68, 68, 0.08)" : "transparent",
+                        backgroundColor: sv.row,
                       }}
                     >
                       <td style={{ padding: "12px 14px", fontWeight: 600, color: "#F8FAFC" }}>
@@ -251,7 +367,7 @@ export default function ScanDetailPage() {
                           {item.signal_b}
                         </span>
                       </td>
-                      <td style={{ padding: "12px 14px", color: isContradiction ? "#FCA5A5" : "#94A3B8" }}>
+                      <td style={{ padding: "12px 14px", color: sv.finding }}>
                         {item.finding}
                       </td>
                       <td style={{ padding: "12px 14px", textAlign: "right" }}>
@@ -261,9 +377,10 @@ export default function ScanDetailPage() {
                             borderRadius: "6px",
                             fontSize: "11px",
                             fontWeight: 700,
-                            backgroundColor: isContradiction ? "rgba(239, 68, 68, 0.25)" : "rgba(16, 185, 129, 0.2)",
-                            color: isContradiction ? "#EF4444" : "#34D399",
-                            border: `1px solid ${isContradiction ? "rgba(239, 68, 68, 0.5)" : "rgba(16, 185, 129, 0.4)"}`,
+                            backgroundColor: sv.bg,
+                            color: sv.text,
+                            border: `1px solid ${sv.border}`,
+                            whiteSpace: "nowrap",
                           }}
                         >
                           {item.status}
@@ -311,7 +428,7 @@ export default function ScanDetailPage() {
                 {scan.holder_name || "TRAVELER"}
               </p>
               <span style={{ fontSize: "12px", color: "#94A3B8", fontFamily: "monospace" }}>
-                Passport {scan.document_number || "P104291"}
+                Document {scan.document_number || "NOT READ"}
               </span>
             </div>
 
@@ -441,10 +558,14 @@ export default function ScanDetailPage() {
               🖼️ Document Visual Scan
             </h3>
             <div style={{ height: "260px", backgroundColor: "#0B0F19", borderRadius: "8px", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(255, 255, 255, 0.05)" }}>
-              {scan.document_image_path ? (
+              {/* Use the signed URL the API mints, not the storage URI. The old
+                  code did `http://localhost:8000/${scan.document_image_path}`,
+                  which concatenated a hardcoded host with a `supabase://…` URI
+                  and 404'd every time — hence the permanently broken previews. */}
+              {scan.document_image_url ? (
                 <img
-                  src={`http://localhost:8000/${scan.document_image_path}`}
-                  alt="Scanned Document"
+                  src={scan.document_image_url}
+                  alt="Scanned travel document"
                   style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
                   onError={(e) => {
                     (e.target as HTMLElement).style.display = 'none';
@@ -462,7 +583,9 @@ export default function ScanDetailPage() {
           {/* Face Match Card */}
           <div style={{ backgroundColor: "rgba(15, 23, 42, 0.6)", border: "1px solid rgba(255, 255, 255, 0.08)", borderRadius: "12px", padding: "20px" }}>
             <h3 style={{ fontSize: "15px", fontWeight: 600, color: "#F8FAFC", margin: "0 0 16px" }}>
-              👤 ArcFace 512-d Biometric Verification
+              {/* Was "ArcFace 512-d". The ArcFace backend was removed; matching
+                  runs on SFace, which produces a 128-d feature. */}
+              👤 SFace 128-d Biometric Verification (1:1)
             </h3>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
               <div style={{ textAlign: "center" }}>
@@ -470,8 +593,11 @@ export default function ScanDetailPage() {
                   Document Photo
                 </span>
                 <div style={{ width: "100px", height: "120px", backgroundColor: "#0B0F19", borderRadius: "8px", margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(255,255,255,0.1)", overflow: "hidden" }}>
-                  {scan.face_results?.crop_path ? (
-                    <img src={`http://localhost:8000/${scan.face_results.crop_path}`} alt="Doc Face" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  {/* `crop_path` was a server-local filesystem path that the API
+                      never returned, so this was always the placeholder. Show the
+                      document image itself as the portrait source instead. */}
+                  {scan.document_image_url ? (
+                    <img src={scan.document_image_url} alt="Document portrait" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                   ) : (
                     <span style={{ fontSize: "32px" }}>👤</span>
                   )}
@@ -482,8 +608,8 @@ export default function ScanDetailPage() {
                   Live Capture Frame
                 </span>
                 <div style={{ width: "100px", height: "120px", backgroundColor: "#0B0F19", borderRadius: "8px", margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(255,255,255,0.1)", overflow: "hidden" }}>
-                  {scan.face_image_path ? (
-                    <img src={`http://localhost:8000/${scan.face_image_path}`} alt="Live Face" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  {scan.face_image_url ? (
+                    <img src={scan.face_image_url} alt="Live capture" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                   ) : (
                     <span style={{ fontSize: "32px" }}>📸</span>
                   )}
@@ -493,16 +619,45 @@ export default function ScanDetailPage() {
 
             <div style={{ backgroundColor: "rgba(30, 41, 59, 0.5)", padding: "12px", borderRadius: "8px", fontSize: "13px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
-                <span style={{ color: "#94A3B8" }}>Cosine Similarity Score:</span>
-                <strong style={{ color: (scan.face_results?.similarity_score ?? 0.94) >= 0.72 ? "#34D399" : "#EF4444" }}>
-                  {((scan.face_results?.similarity_score ?? 0.94) * 100).toFixed(1)}% (Threshold: 72%)
-                </strong>
+                <span style={{ color: "#94A3B8" }}>Raw Cosine Similarity:</span>
+                {/* Report only what the backend measured.
+                    This used to read `scan.face_results?.similarity_score ?? 0.94`
+                    against an always-null object, so EVERY scan — including real
+                    biometric failures — displayed "94.0% / PASSED (Live)".
+
+                    It then compared against a hardcoded 0.70, which was the
+                    OUTPUT of a calibration remap rather than a real cosine. The
+                    stored match_score is now the raw SFace cosine and the
+                    operating threshold is 0.363, so the comparison is meaningful. */}
+                {(() => {
+                  const face = scan.face_result ?? scan.face_results;
+                  const score = face?.match_score ?? face?.similarity_score;
+                  if (score === null || score === undefined) {
+                    return <strong style={{ color: "#94A3B8" }}>Not performed</strong>;
+                  }
+                  const THRESHOLD = 0.363;
+                  const passed = score >= THRESHOLD;
+                  return (
+                    <strong style={{ color: passed ? "#34D399" : "#EF4444" }}>
+                      {score.toFixed(4)} / {THRESHOLD} — {passed ? "MATCH" : "NO MATCH"}
+                    </strong>
+                  );
+                })()}
               </div>
               <div style={{ display: "flex", justifyContent: "space-between" }}>
                 <span style={{ color: "#94A3B8" }}>Fourier Texture Liveness:</span>
-                <strong style={{ color: scan.face_results?.is_live !== false ? "#34D399" : "#EF4444" }}>
-                  {scan.face_results?.is_live !== false ? "PASSED (Live)" : "FAILED (Screen Replay / Print)"}
-                </strong>
+                {(() => {
+                  const face = scan.face_result ?? scan.face_results;
+                  const live = face?.liveness_passed ?? face?.is_live;
+                  if (live === null || live === undefined) {
+                    return <strong style={{ color: "#94A3B8" }}>Not performed</strong>;
+                  }
+                  return (
+                    <strong style={{ color: live ? "#34D399" : "#EF4444" }}>
+                      {live ? "PASSED (Live)" : "FAILED (Screen Replay / Print)"}
+                    </strong>
+                  );
+                })()}
               </div>
             </div>
           </div>
@@ -515,29 +670,45 @@ export default function ScanDetailPage() {
             <h3 style={{ fontSize: "15px", fontWeight: 600, color: "#F8FAFC", margin: "0 0 16px" }}>
               📋 ICAO 9303 OCR & Demographics
             </h3>
+            {/*
+              Every field below renders NOT READ when the backend has no value.
+
+              These were `||` fallbacks to "JOHN DOE", "P12345678", "IND" and
+              "2031-10-15". On a document whose OCR failed, the panel therefore
+              displayed a complete, plausible passport — including a valid future
+              expiry date — for data that had never been read. On an evidence
+              screen that an officer acts on, inventing a value is worse than
+              showing a blank.
+            */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", fontSize: "13px" }}>
               <div>
                 <span style={{ color: "#64748B", fontSize: "11px", textTransform: "uppercase" }}>Full Name</span>
-                <p style={{ color: "#F8FAFC", fontWeight: 600, margin: "2px 0 0" }}>{scan.holder_name || "JOHN DOE"}</p>
+                <FieldValue value={scan.holder_name} />
               </div>
               <div>
                 <span style={{ color: "#64748B", fontSize: "11px", textTransform: "uppercase" }}>Document Number</span>
-                <p style={{ color: "#F8FAFC", fontWeight: 600, margin: "2px 0 0", fontFamily: "monospace" }}>{scan.document_number || "P12345678"}</p>
+                <FieldValue value={scan.document_number} mono />
               </div>
               <div>
                 <span style={{ color: "#64748B", fontSize: "11px", textTransform: "uppercase" }}>Nationality</span>
-                <p style={{ color: "#F8FAFC", fontWeight: 600, margin: "2px 0 0" }}>{scan.extracted_data?.nationality || scan.issuing_country || "IND"}</p>
+                <FieldValue value={scan.extracted_data?.nationality || scan.issuing_country} />
               </div>
               <div>
                 <span style={{ color: "#64748B", fontSize: "11px", textTransform: "uppercase" }}>Date of Expiry</span>
-                <p style={{ color: "#F8FAFC", fontWeight: 600, margin: "2px 0 0" }}>{scan.extracted_data?.expiry_date || "2031-10-15"}</p>
+                <FieldValue value={scan.extracted_data?.expiry_date} />
               </div>
             </div>
 
-            {/* MRZ Line Box */}
+            {/* MRZ Line Box — real decoded lines only. */}
             <div style={{ marginTop: "16px", backgroundColor: "#0B0F19", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "6px", padding: "12px", fontFamily: "monospace", fontSize: "12px", color: "#38BDF8" }}>
-              <div>{scan.extracted_data?.mrz_lines?.[0] || "P<INDDOE<<JOHN<<<<<<<<<<<<<<<<<<<<<<<<<<<<"}</div>
-              <div>{scan.extracted_data?.mrz_lines?.[1] || "P123456784IND9001015M3110158<<<<<<<<<<<<<02"}</div>
+              {mrzLines.length > 0 ? (
+                mrzLines.map((line: string, i: number) => <div key={i}>{line}</div>)
+              ) : (
+                <div style={{ color: "#F87171" }}>
+                  ⚠ MRZ NOT DECODED — no machine-readable zone was read from this
+                  document. Do not treat the fields above as checksum-verified.
+                </div>
+              )}
             </div>
           </div>
 

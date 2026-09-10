@@ -23,6 +23,9 @@ class RiskScore(Base):
     contradiction_matrix = Column(JSON, nullable=True)  # List of independent checks and semantic contradictions
     identity_graph_summary = Column(JSON, nullable=True)  # Graph nodes, edges, and identity-link anomalies
     fraud_patterns_matched = Column(JSON, nullable=True)  # EU-FADO style known counterfeit signatures
+    # Outcome of comparing the scan against the MRZ reference registry:
+    # {status, differences[], summary, reference_holder}
+    mrz_reference = Column(JSON, nullable=True)
     canonical_hash = Column(String(64), nullable=True)  # Cryptographic SHA-256 evidence fingerprint
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 

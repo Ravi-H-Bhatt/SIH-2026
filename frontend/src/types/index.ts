@@ -170,8 +170,13 @@ export interface ScanRecord {
   checkpoint_id?: string | null;
   officer_id?: string | null;
   officer_name?: string | null;
+  // Canonical storage URIs (supabase://bucket/path). Not directly renderable.
   document_image_path?: string | null;
   face_image_path?: string | null;
+  // Short-lived Supabase signed URLs minted per single-scan read. These are what
+  // an <img src> must use — the *_path values are storage URIs, not HTTP URLs.
+  document_image_url?: string | null;
+  face_image_url?: string | null;
   notes?: string | null;
   decision: Decision;
   final_decision?: Decision | null;
@@ -279,4 +284,80 @@ export interface OperationsMapData {
   total_points: number;
   /** Backend disclaimer: origins are country centroids, not address geocodes. */
   geocode_note: string;
+}
+
+// ─── Biometrics ───────────────────────────────────────────────────────────────
+//
+// `cosine_similarity` is the RAW SFace cosine in [-1, 1] as produced by the
+// model. `similarity_percent` is max(0, cosine) * 100 and exists only so the UI
+// has an integer to render — it is not a probability or a confidence level.
+//
+// Negative cosines are legitimate results meaning "nothing alike".
+
+/** One ranked candidate from a 1:N gallery search. */
+export interface FaceSearchMatch {
+  scan_id: string;
+  holder_name: string | null;
+  document_number: string | null;
+  nationality: string | null;
+  document_type: string | null;
+  encounter_date: string | null;
+  risk_level: string | null;
+  final_decision: string | null;
+  cosine_similarity: number;
+  similarity_percent: number;
+  is_match: boolean;
+}
+
+export interface FaceSearchResponse {
+  probe: {
+    face_count: number;
+    detector_confidence: number | null;
+    embedding_dimension: number;
+  };
+  /** Raw cosine a candidate must reach to count as the same person (1:N). */
+  threshold: number;
+  gallery_size: number;
+  compared: number;
+  /** Stored records whose embedding could not be compared at all. */
+  incomparable_records: number;
+  match_count: number;
+  identified: boolean;
+  best_match: FaceSearchMatch | null;
+  matches: FaceSearchMatch[];
+  results: FaceSearchMatch[];
+  metric: string;
+}
+
+interface FaceImageAssessment {
+  face_count: number;
+  confidence: number | null;
+  usable: boolean;
+  reason: string | null;
+}
+
+export interface FaceCompareResponse {
+  threshold: number;
+  image_a: FaceImageAssessment;
+  image_b: FaceImageAssessment;
+  cosine_similarity: number | null;
+  similarity_percent: number | null;
+  is_match: boolean | null;
+  /** NOT_COMPARABLE means a face was missing or ambiguous, not that they differ. */
+  verdict: "SAME_PERSON" | "DIFFERENT_PERSON" | "NOT_COMPARABLE" | null;
+  model?: string;
+  metric?: string;
+}
+
+export interface FaceGalleryHealth {
+  total_with_embedding: number;
+  comparable: number;
+  incomparable: number;
+  expected_dimension: number;
+  dimension_breakdown: Record<string, number>;
+  incomparable_scans: {
+    scan_id: string;
+    dimension: number;
+    holder_name: string | null;
+  }[];
 }

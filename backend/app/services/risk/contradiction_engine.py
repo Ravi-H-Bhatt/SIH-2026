@@ -87,26 +87,99 @@ class ContradictionEngine:
             })
 
         # --- SIGNAL 2: Biometric 1:1 Live Face Match ---
-        face_match_score = face_result.get("match_score", face_result.get("similarity_score", 0.90))
-        # THRESHOLD: 0.70 = REJECT if below (CRITICAL FIX)
-        face_matched = face_match_score >= 0.70
-        liveness_passed = face_result.get("liveness_passed", face_result.get("is_live", True))
+        #
+        # `match_passed` from face_service is authoritative. This used to default
+        # the score to 0.90 when absent and then test it against a hardcoded
+        # 0.70, so a scan with no biometric result at all was reported as a
+        # confident PASS. It also duplicated a threshold owned by face_service.
+        raw_cosine = face_result.get("raw_cosine")
+        face_match_score = face_result.get("similarity_score")
+        if face_match_score is None:
+            face_match_score = face_result.get("match_score")
+
+        face_matched = face_result.get("match_passed") is True
+        liveness_passed = face_result.get("is_live")
+        if liveness_passed is None:
+            liveness_passed = face_result.get("liveness_passed")
+
+        # Officer-facing figure. Shows the true cosine rather than a rescaled
+        # percentage that cannot be traced back to the model output.
+        score_text = (
+            f"cosine {raw_cosine:.3f}" if raw_cosine is not None else "not measured"
+        )
 
         # A biometric comparison that never ran is not a mismatch. Treat it as an
         # open item requiring an officer, not as evidence against the traveller.
-        biometric_performed = face_result.get("biometric_performed", True)
-        if not biometric_performed:
-            contradiction_flags.append(
-                "Biometric match not performed — no live face capture supplied"
+        biometric_performed = face_result.get("biometric_performed", False)
+        if not biometric_performed or face_result.get("match_passed") is None:
+            # Report the ACTUAL reason. This row previously hardcoded "No live
+            # capture submitted" for every not-performed case, so a scan where
+            # the selfie WAS supplied but the document portrait could not be
+            # resolved told the officer the opposite of what happened.
+            reason_code = face_result.get("not_performed_reason") or "UNKNOWN"
+            doc_faces = face_result.get("document_face_count")
+            live_faces = face_result.get("live_face_count")
+
+            reason_text = {
+                "NO_LIVE_CAPTURE": (
+                    "No live capture submitted",
+                    "Face verification is pending a live capture at the counter.",
+                ),
+                "NO_DOCUMENT_PORTRAIT": (
+                    "No portrait found on the document",
+                    "No face could be localised on the credential, so there was "
+                    "nothing to compare the traveller against.",
+                ),
+                "DOCUMENT_PORTRAIT_AMBIGUOUS": (
+                    f"{doc_faces} faces on the document, more than one person",
+                    "The document carries faces belonging to more than one "
+                    "person, so the credential portrait cannot be identified "
+                    "automatically. An officer must confirm it visually.",
+                ),
+                "NO_FACE_IN_LIVE_CAPTURE": (
+                    "No face found in the live capture",
+                    "The live capture contains no detectable face. Recapture "
+                    "with the traveller centred and evenly lit.",
+                ),
+                "MULTIPLE_FACES_IN_LIVE_CAPTURE": (
+                    f"{live_faces} faces in the live capture",
+                    "More than one person is in frame. Recapture with only the "
+                    "traveller present.",
+                ),
+                "MODELS_UNAVAILABLE": (
+                    "Biometric models not loaded",
+                    "The face recognition models are unavailable on this server, "
+                    "so no biometric check could run.",
+                ),
+                "COMPARISON_ERROR": (
+                    "Comparison failed",
+                    "The biometric comparison raised an error. See the scan flags.",
+                ),
+            }.get(
+                reason_code,
+                (
+                    "Comparison not performed",
+                    "The biometric comparison did not run. See the scan flags.",
+                ),
             )
+
+            signal_b, finding = reason_text
+            contradiction_flags.append(f"Biometric match not performed — {signal_b}")
             contradiction_matrix.append({
                 "category": "Biometrics",
                 "check_name": "Document Portrait vs. Live Traveler Face",
-                "signal_a": "Portrait extracted",
-                "signal_b": "No live capture submitted",
+                "signal_a": (
+                    "Portrait extracted" if doc_faces else "No portrait extracted"
+                ),
+                "signal_b": signal_b,
                 "status": "NOT_PERFORMED",
-                "severity": "INFO",
-                "finding": "Face verification is pending a live capture at the counter.",
+                # An ambiguous document is a real finding, not an informational note.
+                "severity": (
+                    "HIGH"
+                    if reason_code in ("DOCUMENT_PORTRAIT_AMBIGUOUS", "MODELS_UNAVAILABLE")
+                    else "MEDIUM"
+                ),
+                "finding": finding,
             })
         elif chip_is_valid and not face_matched:
             flag = "CONTRADICTION: Chip PKI signature is valid, but traveler live face fails biometric match with passport portrait"
@@ -117,32 +190,35 @@ class ContradictionEngine:
                 "category": "Biometrics",
                 "check_name": "Chip Authenticity vs. Live Traveler Face",
                 "signal_a": "Chip PKI: Valid",
-                "signal_b": f"Face Match: Failed ({int(face_match_score*100)}%)",
+                "signal_b": f"Face Match: Failed ({score_text})",
                 "status": "CONTRADICTION",
                 "severity": "CRITICAL",
                 "finding": "Genuine passport presented by an impostor / lookalike traveler.",
             })
         elif not face_matched:
-            flag = f"Biometric mismatch: Live traveler does not match credential portrait ({int(face_match_score*100)}%)"
+            flag = f"Biometric mismatch: Live traveler does not match credential portrait ({score_text})"
             contradiction_flags.append(flag)
             escalated_risk_score = max(escalated_risk_score, 80.0)
             contradiction_matrix.append({
                 "category": "Biometrics",
                 "check_name": "Document Portrait vs. Live Traveler Face",
                 "signal_a": "Portrait Extracted",
-                "signal_b": f"Face Match: Failed ({int(face_match_score*100)}%)",
+                "signal_b": f"Face Match: Failed ({score_text})",
                 "status": "ALERT",
                 "severity": "HIGH",
                 "finding": "Live traveler facial geometry does not match the credential portrait.",
             })
-        elif not liveness_passed:
+        elif liveness_passed is False:
+            # Explicit `is False` — a None here means "not assessed", and
+            # `not None` would have raised a spoofing alert on every capture
+            # whose liveness check could not run.
             flag = "Anti-spoofing alert: Presentation attack or non-live face detected"
             contradiction_flags.append(flag)
             escalated_risk_score = max(escalated_risk_score, 85.0)
             contradiction_matrix.append({
                 "category": "Biometrics",
                 "check_name": "Anti-Spoofing Liveness Verification",
-                "signal_a": f"Face Match: {int(face_match_score*100)}%",
+                "signal_a": f"Face Match: {score_text}",
                 "signal_b": "Liveness: Failed",
                 "status": "ALERT",
                 "severity": "HIGH",
@@ -154,7 +230,7 @@ class ContradictionEngine:
                 "category": "Biometrics",
                 "check_name": "Chip Authenticity vs. Live Traveler Face" if has_chip else "Document Portrait vs. Live Face",
                 "signal_a": signal_a_face,
-                "signal_b": f"Face Match: {int(face_match_score*100)}%",
+                "signal_b": f"Face Match: {score_text}",
                 "status": "PASS",
                 "severity": "LOW",
                 "finding": "Live traveler facial geometry matches document credential.",
@@ -180,25 +256,59 @@ class ContradictionEngine:
                     "finding": "Visual demographic text was altered while MRZ line retained original format.",
                 })
             else:
+                # The finding text now follows the status. It was hardcoded to
+                # "match ICAO 9303 MRZ encoding perfectly" on every branch, so a
+                # row reading MRZ: Invalid / ALERT still claimed the data matched
+                # perfectly — directly contradicting its own status badge.
+                is_clean = mrz_valid and not mrz_has_conflict
+                if is_clean:
+                    finding = (
+                        "Visual zone OCR demographics agree with the ICAO 9303 "
+                        "MRZ encoding, and all check digits verify."
+                    )
+                elif not mrz_valid:
+                    finding = (
+                        "The machine-readable zone could not be verified — check "
+                        "digits are absent or do not compute. The fields shown "
+                        "come from OCR only and are not checksum-confirmed."
+                    )
+                else:
+                    finding = (
+                        "MRZ check digits verify, but the visual zone text does "
+                        "not agree with the decoded MRZ values."
+                    )
+
                 contradiction_matrix.append({
                     "category": "Data Consistency",
                     "check_name": "MRZ Checksum vs. Visual Zone OCR",
-                    "signal_a": "MRZ: Valid" if mrz_valid else "MRZ: Invalid",
-                    "signal_b": "Visual Zone: Consistent" if not mrz_has_conflict else "Visual Zone: Inconsistent",
-                    "status": "PASS" if mrz_valid and not mrz_has_conflict else "ALERT",
-                    "severity": "LOW" if mrz_valid else "HIGH",
-                    "finding": "Visual zone OCR demographics match ICAO 9303 MRZ encoding perfectly.",
+                    "signal_a": "MRZ: Valid" if mrz_valid else "MRZ: Unverified",
+                    "signal_b": (
+                        "Visual Zone: Consistent" if not mrz_has_conflict
+                        else "Visual Zone: Inconsistent"
+                    ),
+                    "status": "PASS" if is_clean else "ALERT",
+                    "severity": "LOW" if is_clean else "HIGH",
+                    "finding": finding,
                 })
         else:
-            # National ID / Aadhaar document without MRZ
+            # National ID / Aadhaar document without an MRZ.
+            #
+            # Reported as NOT_PERFORMED, not PASS. There are no check digits on
+            # this credential, so nothing was verified — the previous "Visual
+            # Zone: Verified / PASS" row asserted an integrity check that never
+            # happened.
             contradiction_matrix.append({
                 "category": "Data Consistency",
-                "check_name": "Demographic Data Consistency",
-                "signal_a": "Visual Zone: Verified",
-                "signal_b": "Identity Fields: Complete",
-                "status": "PASS",
-                "severity": "LOW",
-                "finding": "Document demographic fields verified consistently via OCR Visual Inspection.",
+                "check_name": "Machine-readable integrity check",
+                "signal_a": "No MRZ on this document type",
+                "signal_b": "Fields read by OCR only",
+                "status": "NOT_PERFORMED",
+                "severity": "INFO",
+                "finding": (
+                    "This credential carries no machine-readable zone, so its "
+                    "fields cannot be checksum-verified. Demographics are OCR "
+                    "readings and have not been cryptographically corroborated."
+                ),
             })
 
         # --- SIGNAL 4: Biometric Verification vs Identity Continuity Graph ---
@@ -233,6 +343,28 @@ class ContradictionEngine:
                 "status": "ALERT",
                 "severity": "HIGH",
                 "finding": "Cross-encounter identity link detected across distinct demographic records.",
+            })
+        elif not biometric_performed:
+            # No biometric ran, so "no contradictory records" is not evidence of
+            # anything. This branch used to report "Current Face: Verified / PASS"
+            # regardless, so a scan whose face check never happened displayed a
+            # green PASS on the identity-continuity row.
+            searched = identity_graph_summary.get("search_performed")
+            contradiction_matrix.append({
+                "category": "Identity Continuity",
+                "check_name": "Current Biometric vs. Historical Graph",
+                "signal_a": "Current Face: NOT VERIFIED",
+                "signal_b": (
+                    "History: searched, no match"
+                    if searched
+                    else "History: not searched"
+                ),
+                "status": "NOT_PERFORMED",
+                "severity": "MEDIUM",
+                "finding": (
+                    "The live biometric was not verified against the document, so "
+                    "identity continuity across past crossings cannot be confirmed."
+                ),
             })
         else:
             contradiction_matrix.append({

@@ -152,13 +152,13 @@ export default function ScanHistoryPage() {
                     {scan.id.substring(0, 8)}...
                   </td>
                   <td style={{ padding: "16px 24px", color: "#F8FAFC", textTransform: "uppercase" }}>
-                    {scan.document_type || "PASSPORT"}
+                    {scan.document_type || "—"}
                   </td>
                   <td style={{ padding: "16px 24px", color: "#CBD5E1", fontFamily: "monospace" }}>
-                    {scan.document_number || "P12345678"}
+                    {scan.document_number || "—"}
                   </td>
                   <td style={{ padding: "16px 24px", color: "#F8FAFC" }}>
-                    {scan.holder_name || "JOHN DOE"}
+                    {scan.holder_name || "NOT READ"}
                   </td>
                   <td style={{ padding: "16px 24px" }}>
                     {getRiskBadge(scan.risk_score?.level || "low")}

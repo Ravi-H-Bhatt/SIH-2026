@@ -19,13 +19,37 @@ import re
 import asyncio
 import shutil
 import sys
+from datetime import date
 from typing import Dict, Any, Tuple, Optional, List
 from PIL import Image, ImageEnhance, ImageFilter
 
 from app.core.config import settings
+from app.services.geo.geo_reference import geo_reference
 from app.services.ocr.mrz import parse_mrz_lines
 
 logger = logging.getLogger(__name__)
+
+# Widest range a real travel-document date can fall in. Used to discard OCR
+# noise like "11/11/1111" before it is recorded as a date of birth or expiry.
+MIN_DOCUMENT_YEAR = 1900
+MAX_DOCUMENT_YEAR = 2100
+
+
+def _is_plausible_document_date(iso_date: Optional[str]) -> bool:
+    """True when an ISO yyyy-mm-dd string is a real, in-range calendar date."""
+    if not iso_date:
+        return False
+    try:
+        year, month, day = (int(part) for part in iso_date.split("-"))
+    except (ValueError, AttributeError):
+        return False
+    if not MIN_DOCUMENT_YEAR <= year <= MAX_DOCUMENT_YEAR:
+        return False
+    try:
+        date(year, month, day)
+    except ValueError:
+        return False
+    return True
 
 try:
     import cv2
@@ -242,6 +266,9 @@ class OCRService:
         Extracts structured fields from the visual inspection zone of a passport.
         Filters out header labels, sample watermarks, and boilerplate text.
         """
+        # nationality / issuing_country start as None, NOT "IND". Defaulting them
+        # meant every document read through the visual path — including foreign
+        # passports — was recorded as Indian and geolocated to India.
         data = {
             "surname": "",
             "given_names": "",
@@ -250,8 +277,9 @@ class OCRService:
             "date_of_birth": None,
             "expiry_date": None,
             "sex": None,
-            "nationality": "IND",
-            "issuing_country": "IND",
+            "nationality": None,
+            "issuing_country": None,
+            "aliases": [],
         }
 
         # Ignored words / watermarks / headers that should never be names or numbers
@@ -266,6 +294,39 @@ class OCRService:
         for i, line in enumerate(ocr_lines):
             clean_l = line.strip()
             upper_l = clean_l.upper()
+
+            # Plain "NAME:" / "FULL NAME:" / "NAME OF HOLDER" label.
+            #
+            # Only Surname and Given-Names labels were handled, so any document
+            # that prints a single combined name field yielded holder_name=""
+            # and was persisted as the placeholder "TRAVELER". Because the
+            # watchlist and OpenSanctions screening take holder_name as input,
+            # an unread name meant NOTHING was screened — a wanted-person notice
+            # reading "NAME: USAMA BIN LADIN" produced no sanctions hit at all.
+            if (
+                re.search(r"^\s*(?:FULL\s+)?NAME\s*(?:OF\s+HOLDER)?\s*[:\-]", clean_l, re.IGNORECASE)
+                and not data["holder_name"]
+            ):
+                after = re.split(r"[:\-]", clean_l, maxsplit=1)
+                candidate = after[1].strip() if len(after) > 1 else ""
+                if not candidate and i + 1 < num_lines:
+                    candidate = ocr_lines[i + 1].strip()
+                # Keep letters, spaces, hyphens and apostrophes only.
+                candidate = re.sub(r"[^A-Za-z\s'\-]", " ", candidate).strip()
+                candidate = re.sub(r"\s{2,}", " ", candidate)
+                if len(candidate) >= 3 and candidate.upper() not in blacklist:
+                    data["holder_name"] = candidate.upper()
+
+            # Aliases / also-known-as. Screened alongside the primary name,
+            # because sanctions and wanted lists are frequently keyed on an alias.
+            if re.search(r"^\s*(?:ALIAS(?:ES)?|A\.?K\.?A\.?|OTHER\s+NAMES?)\s*[:\-]", clean_l, re.IGNORECASE):
+                after = re.split(r"[:\-]", clean_l, maxsplit=1)
+                alias_raw = after[1].strip() if len(after) > 1 else ""
+                for alias in re.split(r"[,;/]", alias_raw):
+                    alias = re.sub(r"[^A-Za-z\s'\-]", " ", alias).strip()
+                    alias = re.sub(r"\s{2,}", " ", alias)
+                    if len(alias) >= 3 and alias.upper() not in blacklist:
+                        data["aliases"].append(alias.upper())
 
             # Surname extraction
             if re.search(r"\b(?:Surname|Nom)\b", clean_l, re.IGNORECASE) and not data["surname"]:
@@ -318,18 +379,30 @@ class OCRService:
                         break
 
             # Expiry Date
-            if re.search(r"\b(?:Expiry|Date\s*of\s*Expiry)\b", clean_l, re.IGNORECASE) and not data["expiry_date"]:
-                # Check current line, next line, or lines after
-                found_dates = []
-                for offset in range(0, 4):
-                    if i + offset < num_lines:
-                        d_matches = re.findall(r"(\d{2})[/-](\d{2})[/-](\d{4})", ocr_lines[i + offset])
-                        for d, m, y in d_matches:
-                            found_dates.append(f"{y}-{m}-{d}")
-                if found_dates:
-                    # Sort dates so later date (expiry) is picked over issue date
-                    found_dates.sort()
-                    data["expiry_date"] = found_dates[-1]
+            #
+            # Prefer a date on the labelled line itself. Only widen the search
+            # if the label line carries no date, and never look further than the
+            # next two lines — the old version scanned a 4-line window and took
+            # the chronologically latest date found anywhere in it, so an
+            # unrelated later date elsewhere on the page could be recorded as the
+            # expiry of the document.
+            if re.search(r"\b(?:Expiry|Date\s*of\s*Expiry)\b", clean_l, re.IGNORECASE) \
+                    and not data["expiry_date"]:
+                for offset in range(0, 3):
+                    if i + offset >= num_lines:
+                        break
+                    line_dates = [
+                        f"{y}-{m}-{d}"
+                        for d, m, y in re.findall(
+                            r"(\d{2})[/-](\d{2})[/-](\d{4})", ocr_lines[i + offset]
+                        )
+                    ]
+                    line_dates = [dt for dt in line_dates if _is_plausible_document_date(dt)]
+                    if line_dates:
+                        # A data page prints issue and expiry adjacently; expiry
+                        # is the later of the two.
+                        data["expiry_date"] = max(line_dates)
+                        break
 
             # Sex / Gender
             if ("SEX" in upper_l or "GENDER" in upper_l) and not data["sex"]:
@@ -338,13 +411,48 @@ class OCRService:
                 elif "MALE" in upper_l or "/ M" in upper_l or " M" in upper_l:
                     data["sex"] = "M"
 
-        # Combine Holder Name
-        if data["given_names"] and data["surname"]:
-            data["holder_name"] = f"{data['given_names']} {data['surname']}"
-        elif data["given_names"]:
-            data["holder_name"] = data["given_names"]
-        elif data["surname"]:
-            data["holder_name"] = data["surname"]
+            # Country code (explicit ICAO 3-letter field on the data page)
+            if re.search(r"\b(?:Country\s*Code|Code\s*of\s*Issuing\s*State)\b", clean_l, re.IGNORECASE) \
+                    and not data["issuing_country"]:
+                for text_to_check in [clean_l, ocr_lines[i + 1] if i + 1 < num_lines else ""]:
+                    code_match = re.search(r"\b([A-Z]{3})\b", text_to_check.upper())
+                    if code_match:
+                        resolved = geo_reference.resolve_from_text(code_match.group(1))
+                        if resolved:
+                            data["issuing_country"] = resolved
+                            break
+
+            # Nationality — printed in words on the data page ("INDIAN"),
+            # resolved to ISO-3 rather than assumed.
+            if re.search(r"\b(?:Nationality|Nationalit)\b", clean_l, re.IGNORECASE) \
+                    and not data["nationality"]:
+                for text_to_check in [clean_l, ocr_lines[i + 1] if i + 1 < num_lines else ""]:
+                    resolved = geo_reference.resolve_from_text(text_to_check)
+                    if resolved:
+                        data["nationality"] = resolved
+                        break
+
+        # Fall back to whole-document inference, still resolved rather than
+        # assumed. "Republic of India" in the header resolves to IND; a document
+        # with no recognisable country stays None and is flagged by validation.
+        if not data["issuing_country"]:
+            data["issuing_country"] = geo_reference.resolve_from_text(full_text)
+        if not data["nationality"]:
+            data["nationality"] = data["issuing_country"]
+
+        # Combine Holder Name. A name already captured from an explicit "NAME:"
+        # label wins — do not overwrite it with partial surname/given-name reads.
+        if not data["holder_name"]:
+            if data["given_names"] and data["surname"]:
+                data["holder_name"] = f"{data['given_names']} {data['surname']}"
+            elif data["given_names"]:
+                data["holder_name"] = data["given_names"]
+            elif data["surname"]:
+                data["holder_name"] = data["surname"]
+
+        # De-duplicate aliases, and drop any that merely repeat the primary name.
+        primary = (data["holder_name"] or "").strip().upper()
+        data["aliases"] = sorted({a for a in data["aliases"] if a and a != primary})
 
         return data
 
@@ -449,8 +557,17 @@ class OCRService:
                 "holder_name": holder_name,
                 "surname": parsed.get("surname") or visual_fields.get("surname", ""),
                 "given_names": parsed.get("given_names") or visual_fields.get("given_names", ""),
-                "issuing_country": parsed.get("issuing_country", "IND"),
-                "nationality": parsed.get("nationality", "IND"),
+                # Aliases feed watchlist / sanctions screening alongside the
+                # primary name — listings are often keyed on an alias.
+                "aliases": visual_fields.get("aliases", []),
+                # MRZ is check-digit protected, so it wins over the visual zone.
+                # Neither defaults to IND — an unreadable country stays unknown.
+                "issuing_country": (
+                    parsed.get("issuing_country") or visual_fields.get("issuing_country")
+                ),
+                "nationality": (
+                    parsed.get("nationality") or visual_fields.get("nationality")
+                ),
                 "date_of_birth": dob,
                 "sex": sex,
                 "expiry_date": expiry,
@@ -472,8 +589,9 @@ class OCRService:
                 "holder_name": visual_fields.get("holder_name") or "TRAVELER",
                 "surname": visual_fields.get("surname", ""),
                 "given_names": visual_fields.get("given_names", ""),
-                "issuing_country": visual_fields.get("issuing_country", "IND"),
-                "nationality": visual_fields.get("nationality", "IND"),
+                "aliases": visual_fields.get("aliases", []),
+                "issuing_country": visual_fields.get("issuing_country"),
+                "nationality": visual_fields.get("nationality"),
                 "date_of_birth": visual_fields.get("date_of_birth"),
                 "sex": visual_fields.get("sex") or "U",
                 "expiry_date": visual_fields.get("expiry_date"),
@@ -495,8 +613,11 @@ class OCRService:
         holder_name = None
         dob = None
         sex = None
-        issuing_country = "IND"
-        nationality = "IND"
+        # Resolved from the document text, not assumed. An Aadhaar card that
+        # says "Government of India" resolves to IND; anything unrecognised
+        # stays None so validation can flag it.
+        issuing_country = geo_reference.resolve_from_text(full_text)
+        nationality = issuing_country
         flags = []
 
         # Look for Aadhaar 12-digit format (XXXX XXXX XXXX or XXXXXXXXXXXX)
@@ -546,13 +667,28 @@ class OCRService:
             "date_of_birth": dob,
             "sex": sex or "U",
             "expiry_date": None,
-            "mrz_valid": True,
+            # A document with no MRZ has no check digits to verify, so its
+            # integrity is UNVERIFIED — not valid.
+            #
+            # This block used to report `mrz_valid: True` and
+            # `check_digits: {..., "expiry_valid": True}` unconditionally, with
+            # nothing computed. Downstream that was indistinguishable from a
+            # genuine passing checksum: risk_engine skipped its +25 penalty and
+            # the contradiction matrix rendered a PASS row. Every ID card was
+            # scored as if its integrity had been cryptographically confirmed.
+            #
+            # mrz_required stays False so validation does not penalise a national
+            # ID for lacking an MRZ it is not supposed to have — but nothing now
+            # claims the absent MRZ was checked.
+            "mrz_valid": False,
             "mrz_required": False,
+            "mrz_verifiable": False,
             "mrz_lines": [],
             "check_digits": {
-                "doc_number_valid": True if doc_number else False,
-                "dob_valid": True if dob else False,
-                "expiry_valid": True
+                "doc_number_valid": None,
+                "dob_valid": None,
+                "expiry_valid": None,
+                "note": "No MRZ present on this document type — no check digits to verify",
             },
             "flags": flags,
             "raw_ocr_text": full_text,

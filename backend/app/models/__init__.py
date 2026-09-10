@@ -9,6 +9,7 @@ from app.models.forgery_result import ForgeryResult
 from app.models.face_result import FaceResult
 from app.models.risk_score import RiskScore
 from app.models.audit_log import AuditLog
+from app.models.mrz_reference import MRZReference
 
 __all__ = [
     "User",
@@ -18,4 +19,5 @@ __all__ = [
     "FaceResult",
     "RiskScore",
     "AuditLog",
+    "MRZReference",
 ]

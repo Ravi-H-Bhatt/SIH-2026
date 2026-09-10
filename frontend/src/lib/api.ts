@@ -7,39 +7,44 @@ import type { TokenResponse, LoginRequest } from "@/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-// Dev bypass token — must match what the backend expects
-const BYPASS_TOKEN = "demo-bypass-token-sih26188";
-const BYPASS_AUTH = process.env.NEXT_PUBLIC_BYPASS_AUTH === "true";
+// Single source of truth for where the application JWT lives. AuthContext used
+// to write localStorage["token"] while this client read localStorage["access_token"],
+// so a page reload restored the user but sent no Authorization header.
+export const TOKEN_STORAGE_KEY = "access_token";
+export const USER_STORAGE_KEY = "user";
+
+// The demo bypass that used to live here is gone. It short-circuited getToken()
+// to return a hardcoded "demo-bypass-token-sih26188" string, and the backend had
+// a matching branch that accepted it as a synthetic admin — a permanent,
+// publicly-known admin credential.
 
 class ApiClient {
   private token: string | null = null;
 
   constructor() {
     if (typeof window !== "undefined") {
-      this.token = localStorage.getItem("access_token");
+      this.token = localStorage.getItem(TOKEN_STORAGE_KEY);
     }
   }
 
   setToken(token: string) {
     this.token = token;
     if (typeof window !== "undefined") {
-      localStorage.setItem("access_token", token);
+      localStorage.setItem(TOKEN_STORAGE_KEY, token);
     }
   }
 
   clearToken() {
     this.token = null;
     if (typeof window !== "undefined") {
-      localStorage.removeItem("access_token");
-      localStorage.removeItem("user");
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+      localStorage.removeItem(USER_STORAGE_KEY);
     }
   }
 
   getToken(): string | null {
-    // In bypass mode, always use the demo token
-    if (BYPASS_AUTH) return BYPASS_TOKEN;
     if (!this.token && typeof window !== "undefined") {
-      this.token = localStorage.getItem("access_token");
+      this.token = localStorage.getItem(TOKEN_STORAGE_KEY);
     }
     return this.token;
   }
@@ -64,10 +69,20 @@ class ApiClient {
       headers["Content-Type"] = "application/json";
     }
 
-    const response = await fetch(url, {
-      ...options,
-      headers,
-    });
+    // A bare `fetch` rejection surfaces as the opaque "Failed to fetch", which
+    // gives an officer no idea whether the server is down, still starting, or
+    // rejecting the origin. Translate it into something actionable.
+    let response: Response;
+    try {
+      response = await fetch(url, { ...options, headers });
+    } catch (networkError) {
+      throw new Error(
+        `Cannot reach the screening API at ${API_BASE}. ` +
+          `The backend may be starting up (it takes ~15s), stopped, or blocking ` +
+          `this origin via CORS. Original error: ` +
+          `${networkError instanceof Error ? networkError.message : String(networkError)}`
+      );
+    }
 
     if (response.status === 401) {
       this.clearToken();
@@ -102,6 +117,30 @@ class ApiClient {
     return res;
   }
 
+  /**
+   * Exchanges a verified Supabase/Google session for an application JWT.
+   * The Supabase token is only ever sent to our own backend, which validates it
+   * against Supabase before issuing the application token.
+   */
+  async loginWithGoogle(supabaseAccessToken: string): Promise<TokenResponse> {
+    const res = await this.request<TokenResponse>("/api/v1/auth/google", {
+      method: "POST",
+      body: JSON.stringify({ access_token: supabaseAccessToken }),
+    });
+    this.setToken(res.access_token);
+    if (typeof window !== "undefined") {
+      localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(res));
+    }
+    return res;
+  }
+
+  /** Which sign-in methods the backend actually supports. */
+  async getAuthProviders() {
+    return this.request<{ password: boolean; google: boolean }>(
+      "/api/v1/auth/providers"
+    );
+  }
+
   async refreshToken(): Promise<TokenResponse> {
     return this.request<TokenResponse>("/api/v1/auth/refresh", {
       method: "POST",
@@ -120,6 +159,30 @@ class ApiClient {
   }
 
   // ─── Scans ──────────────────────────────────
+  /**
+   * Travellers gallery — scans with signed document/face image URLs attached.
+   *
+   * `include_images` is opt-in because it costs one Supabase round-trip per
+   * image, so page_size is kept small here.
+   */
+  async getTravellers(params?: {
+    page?: number;
+    page_size?: number;
+    search?: string;
+    risk_level?: string;
+    decision?: string;
+    document_type?: string;
+  }) {
+    const sp = new URLSearchParams({ include_images: "true" });
+    sp.set("page", String(params?.page ?? 1));
+    sp.set("page_size", String(params?.page_size ?? 12));
+    if (params?.search) sp.set("search", params.search);
+    if (params?.risk_level) sp.set("risk_level", params.risk_level);
+    if (params?.decision) sp.set("decision", params.decision);
+    if (params?.document_type) sp.set("document_type", params.document_type);
+    return this.request<import("@/types").ScanListResponse>(`/api/v1/scans?${sp}`);
+  }
+
   async getScans(params?: {
     page?: number;
     page_size?: number;
@@ -266,6 +329,38 @@ class ApiClient {
     return this.request<import("@/types").AuditLogListResponse>(`/api/v1/audit/logs${query}`);
   }
 
+  // ─── Biometrics ──────────────────────────────
+  //
+  // Every similarity these return is a raw SFace cosine in [-1, 1]. Do not
+  // rescale it in the UI — display the number the model produced.
+
+  /** 1:1 — compare two uploaded images directly. */
+  async compareFaces(imageA: File, imageB: File) {
+    const form = new FormData();
+    form.append("image_a", imageA);
+    form.append("image_b", imageB);
+    return this.request<import("@/types").FaceCompareResponse>("/api/v1/face/compare", {
+      method: "POST",
+      body: form,
+    });
+  }
+
+  /** 1:N — identify a probe face against every stored encounter. */
+  async searchFaces(image: File, topK = 10) {
+    const form = new FormData();
+    form.append("image", image);
+    form.append("top_k", String(topK));
+    return this.request<import("@/types").FaceSearchResponse>("/api/v1/face/search", {
+      method: "POST",
+      body: form,
+    });
+  }
+
+  /** Gallery diagnostics — how many stored embeddings are actually comparable. */
+  async faceGalleryHealth() {
+    return this.request<import("@/types").FaceGalleryHealth>("/api/v1/face/gallery");
+  }
+
   // ─── Health ──────────────────────────────────
   async healthCheck() {
     return this.request<{ status: string; database: string }>("/api/v1/health");
@@ -287,6 +382,7 @@ export const dashboardApi = {
 
 export const scansApi = {
   getScans: (params?: { page?: number; page_size?: number; limit?: number; status?: string; document_type?: string; decision?: string }) => api.getScans(params),
+  getTravellers: (params?: { page?: number; page_size?: number; search?: string; risk_level?: string; decision?: string; document_type?: string }) => api.getTravellers(params),
   getScan: (id: string) => api.getScan(id),
   uploadScan: (formData: FormData) => api.createScan(formData),
   makeDecision: (scanId: string, decision: string, notes?: string) => api.makeScanDecision(scanId, decision, notes),
@@ -302,6 +398,12 @@ export const supervisorApi = {
 export const usersApi = {
   getUsers: (skip = 0, limit = 50) => api.getUsers(skip, limit).then(res => Array.isArray(res) ? res : res.users || []),
   createUser: (data: import("@/types").UserCreate) => api.createUser(data),
+};
+
+export const faceApi = {
+  compare: (a: File, b: File) => api.compareFaces(a, b),
+  search: (image: File, topK = 10) => api.searchFaces(image, topK),
+  galleryHealth: () => api.faceGalleryHealth(),
 };
 
 export const auditApi = {

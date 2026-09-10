@@ -131,7 +131,11 @@ def seed():
                 scan_id=case1_id,
                 match_score=0.88,
                 liveness_passed=True,
-                face_embedding=[0.05] * 128,
+                # Fabricated embeddings are worse than none: a constant vector has
+                # cosine 1.0 against every other constant vector and scores high
+                # against any all-positive vector, so seeded rows matched every
+                # real traveller. Only genuine SFace output belongs here.
+                face_embedding=None,
                 watchlist_hits=[],
             )
             case1_risk = RiskScore(
@@ -195,7 +199,11 @@ def seed():
                 scan_id=case2_id,
                 match_score=0.34,
                 liveness_passed=True,
-                face_embedding=[0.02] * 128,
+                # Fabricated embeddings are worse than none: a constant vector has
+                # cosine 1.0 against every other constant vector and scores high
+                # against any all-positive vector, so seeded rows matched every
+                # real traveller. Only genuine SFace output belongs here.
+                face_embedding=None,
                 watchlist_hits=[],
             )
             case2_risk = RiskScore(
@@ -260,7 +268,11 @@ def seed():
                 scan_id=case3_id,
                 match_score=0.91,
                 liveness_passed=True,
-                face_embedding=[0.08] * 128,
+                # Fabricated embeddings are worse than none: a constant vector has
+                # cosine 1.0 against every other constant vector and scores high
+                # against any all-positive vector, so seeded rows matched every
+                # real traveller. Only genuine SFace output belongs here.
+                face_embedding=None,
                 continuity_links=[
                     {
                         "encounter_id": "EN-BOM-8831",

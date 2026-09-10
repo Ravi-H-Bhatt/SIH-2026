@@ -1,88 +1,82 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { User, LoginResponse } from "@/types";
-import { authApi } from "@/lib/api";
-import { useRouter, usePathname } from "next/navigation";
+import { api, authApi, TOKEN_STORAGE_KEY, USER_STORAGE_KEY } from "@/lib/api";
+import { getSupabaseClient } from "@/lib/supabaseClient";
+import { useRouter } from "next/navigation";
 
 interface AuthContextType {
   user: User | null;
   token: string | null;
   isLoading: boolean;
-  login: (credentials: any) => Promise<LoginResponse>;
+  login: (credentials: { email: string; password: string }) => Promise<LoginResponse>;
+  loginWithGoogle: () => Promise<void>;
   logout: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// ── Dev bypass: inject a demo admin user so you go straight to the dashboard ─
-const BYPASS_AUTH = process.env.NEXT_PUBLIC_BYPASS_AUTH === "true";
+/**
+ * The previous implementation had a NEXT_PUBLIC_BYPASS_AUTH mode that injected a
+ * synthetic admin user plus a hardcoded "demo-bypass-token-sih26188" token and
+ * skipped the backend entirely. It has been removed: the token was a constant
+ * committed to the repo, and the backend had a matching branch that accepted it
+ * as a full admin. Every session now originates from a real backend JWT.
+ */
 
-const DEMO_USER: User = {
-  id: "demo-admin-001",
-  email: "admin@borderguard.sih",
-  full_name: "Demo Admin",
-  role: "admin",
-  is_active: true,
-  created_at: new Date().toISOString(),
-};
-
-const DEMO_TOKEN = "demo-bypass-token-sih26188";
+function toUser(res: any, fallbackEmail?: string): User {
+  return (
+    res.user || {
+      id: res.user_id || "unknown",
+      email: res.email || fallbackEmail || "",
+      full_name: res.full_name || "User",
+      role: res.role || "officer",
+      is_active: true,
+      created_at: new Date().toISOString(),
+    }
+  );
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(BYPASS_AUTH ? DEMO_USER : null);
-  const [token, setToken] = useState<string | null>(BYPASS_AUTH ? DEMO_TOKEN : null);
-  const [isLoading, setIsLoading] = useState(!BYPASS_AUTH);
+  const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
-  const pathname = usePathname();
+
+  const persist = useCallback((accessToken: string, nextUser: User) => {
+    setToken(accessToken);
+    setUser(nextUser);
+    api.setToken(accessToken);
+    if (typeof window !== "undefined") {
+      localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(nextUser));
+    }
+  }, []);
 
   useEffect(() => {
-    // If bypass is enabled, we already have a demo user — skip localStorage check
-    if (BYPASS_AUTH) {
-      setIsLoading(false);
-      return;
-    }
-
-    const storedToken = localStorage.getItem("token");
-    const storedUser = localStorage.getItem("user");
+    // Restore from the same key the API client uses. These used to differ
+    // ("token" here vs "access_token" in the client), so a refreshed page showed
+    // a logged-in user while every request went out unauthenticated.
+    const storedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
+    const storedUser = localStorage.getItem(USER_STORAGE_KEY);
 
     if (storedToken && storedUser) {
       try {
         setToken(storedToken);
-        setUser(JSON.parse(storedUser));
+        setUser(toUser(JSON.parse(storedUser)));
+        api.setToken(storedToken);
       } catch {
-        localStorage.removeItem("token");
-        localStorage.removeItem("user");
+        localStorage.removeItem(TOKEN_STORAGE_KEY);
+        localStorage.removeItem(USER_STORAGE_KEY);
       }
     }
     setIsLoading(false);
   }, []);
 
-  const login = async (credentials: any): Promise<LoginResponse> => {
-    // In bypass mode, immediately resolve with the demo user
-    if (BYPASS_AUTH) {
-      setToken(DEMO_TOKEN);
-      setUser(DEMO_USER);
-      return {
-        access_token: DEMO_TOKEN,
-        token_type: "bearer",
-        user: DEMO_USER,
-      };
-    }
-
+  const login = async (credentials: { email: string; password: string }): Promise<LoginResponse> => {
     const response = await authApi.login(credentials);
-    const loggedInUser = response.user || {
-      id: response.user_id || "1",
-      email: response.email || credentials.email,
-      full_name: response.full_name || "User",
-      role: response.role || "officer",
-      is_active: true,
-      created_at: new Date().toISOString(),
-    };
-    setToken(response.access_token);
-    setUser(loggedInUser);
-    localStorage.setItem("token", response.access_token);
-    localStorage.setItem("user", JSON.stringify(loggedInUser));
+    const loggedInUser = toUser(response, credentials.email);
+    persist(response.access_token, loggedInUser);
     return {
       access_token: response.access_token,
       token_type: response.token_type,
@@ -90,22 +84,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   };
 
-  const logout = () => {
-    setToken(null);
-    setUser(null);
-    if (!BYPASS_AUTH) {
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
-      router.push("/login");
-    } else {
-      // In bypass mode, just re-inject the demo user silently
-      setToken(DEMO_TOKEN);
-      setUser(DEMO_USER);
+  /**
+   * Starts the Google OAuth redirect through Supabase. The exchange for an
+   * application JWT happens on return, in the /auth/callback route.
+   */
+  const loginWithGoogle = async (): Promise<void> => {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      throw new Error(
+        "Google sign-in is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY."
+      );
     }
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+        queryParams: { prompt: "select_account" },
+      },
+    });
+    if (error) throw new Error(error.message);
   };
 
+  const logout = useCallback(() => {
+    setToken(null);
+    setUser(null);
+    api.clearToken();
+    // Also drop the Supabase session so "sign out" does not silently re-authenticate.
+    getSupabaseClient()?.auth.signOut().catch(() => undefined);
+    router.push("/login");
+  }, [router]);
+
   return (
-    <AuthContext.Provider value={{ user, token, isLoading, login, logout }}>
+    <AuthContext.Provider value={{ user, token, isLoading, login, loginWithGoogle, logout }}>
       {children}
     </AuthContext.Provider>
   );

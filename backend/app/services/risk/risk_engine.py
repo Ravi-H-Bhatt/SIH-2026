@@ -71,43 +71,123 @@ class RiskEngine:
                 })
 
         # 5. OCR & MRZ Checksum Signal
-        mrz_valid = ocr_result.get("mrz_valid", True)
-        if not mrz_valid:
+        #
+        # Only penalise a FAILED checksum on a document that is supposed to have
+        # one. A national ID card has no MRZ, so `mrz_valid=False` there means
+        # "nothing to verify", not "verification failed" — charging it +25 would
+        # penalise every ID card for the shape of its own standard.
+        #
+        # Conversely a passport with an unreadable MRZ is a genuine finding: the
+        # single most tamper-resistant part of the document could not be read.
+        mrz_valid = ocr_result.get("mrz_valid", False)
+        mrz_required = ocr_result.get("mrz_required", True)
+
+        if mrz_required and not mrz_valid:
             raw_score += 25.0
             for flag in ocr_result.get("flags", []):
                 explanations.append({
                     "flag": flag,
                     "severity": "high"
                 })
+        elif not mrz_required:
+            # Recorded so the officer can see integrity was never machine-verified
+            # on this credential, rather than inferring it from a PASS row.
+            explanations.append({
+                "flag": (
+                    "Document carries no machine-readable zone, so its data "
+                    "integrity could not be verified by check digit — fields were "
+                    "read by OCR only"
+                ),
+                "severity": "low",
+            })
 
         # 6. Document Validation Rules Signal
+        #
+        # Expiry is read from the structured field result rather than by matching
+        # the English substring "Expired document" in a human-readable flag.
+        # That coupling meant rewording the message in validation_service would
+        # silently delete the expiry penalty.
+        #
+        # An expired travel document is also no longer a mere +30 (which landed
+        # at "medium / review"). A document that is not valid for travel is a
+        # hard stop, so it floors the score into the reject band.
         if not validation_result.get("is_valid", True):
+            field_results = validation_result.get("field_results", {})
+            expiry_field = field_results.get("expiry_date", {})
+            expired = expiry_field.get("reason") == "Document expired"
+
             for flag in validation_result.get("flags", []):
-                if "Expired document" in flag:
-                    raw_score += 30.0
-                    explanations.append({"flag": flag, "severity": "high"})
+                is_expiry_flag = flag.startswith("Expired document")
+                if is_expiry_flag and expired:
+                    raw_score = max(raw_score, 80.0)
+                    explanations.append({
+                        "flag": f"{flag} — document is not valid for travel",
+                        "severity": "critical",
+                    })
                 else:
                     raw_score += 15.0
                     explanations.append({"flag": flag, "severity": "medium"})
 
         # 7. Facial Biometrics & Liveness Signal
-        # DEFAULT to 0.0 if missing (not 1.0) - Be strict, not permissive
-        sim_score = face_result.get("similarity_score", face_result.get("match_score", 0.0))
-        is_live = face_result.get("is_live", False)  # Default to NOT live if unverified
+        #
+        # The verdict comes from face_service via `match_passed`, which is the
+        # single source of truth. This block used to re-derive it by testing
+        # `similarity_score < 0.70`, duplicating a threshold that lived in three
+        # places. Since face_service now reports the raw SFace cosine (where the
+        # operating point is ~0.363, not 0.70), that test would have failed
+        # every genuine match.
+        #
+        # Three outcomes are distinguished, because conflating them is what made
+        # undocumented or unphotographed travellers look like impostors:
+        #   match_passed is None   -> no comparison happened
+        #   match_passed is False  -> compared, and the faces differ
+        #   match_passed is True   -> compared, and the faces agree
+        match_passed = face_result.get("match_passed")
+        biometric_performed = face_result.get("biometric_performed", False)
+        raw_cosine = face_result.get("raw_cosine")
+        threshold = face_result.get("match_threshold")
 
-        # THRESHOLD: 0.70 = REJECT if below (CRITICAL FIX)
-        if sim_score < 0.70:
-            raw_score += 35.0
+        if not biometric_performed or match_passed is None:
+            raw_score += 20.0
+            reason = next(
+                (f for f in face_result.get("flags", []) if f),
+                "no live capture was supplied",
+            )
             explanations.append({
-                "flag": f"Biometric threshold FAILED: 1:1 Cosine Similarity ({sim_score * 100:.1f}%) - REJECTED (threshold: 70%)",
-                "severity": "high"
+                "flag": (
+                    "Biometric 1:1 verification was NOT performed — "
+                    f"{reason}. An officer must verify the traveller visually."
+                ),
+                "severity": "medium",
+            })
+        elif not match_passed:
+            raw_score += 35.0
+            detail = (
+                f"cosine {raw_cosine:.4f} < required {threshold:.3f}"
+                if raw_cosine is not None and threshold is not None
+                else "below the required threshold"
+            )
+            explanations.append({
+                "flag": (
+                    f"Biometric 1:1 verification FAILED: the live traveller does "
+                    f"not match the document portrait ({detail})"
+                ),
+                "severity": "high",
             })
 
-        if not is_live:
+        # Liveness is tri-state for the same reason: None means "not assessed".
+        is_live = face_result.get("is_live")
+        if is_live is False:
             raw_score += 45.0
             explanations.append({
-                "flag": "Liveness verification failed: Potential presentation spoof / digital screen replay",
-                "severity": "critical"
+                "flag": "Liveness verification failed: potential presentation spoof / screen replay",
+                "severity": "critical",
+            })
+        elif is_live is None and biometric_performed:
+            raw_score += 10.0
+            explanations.append({
+                "flag": "Liveness could not be assessed on the submitted capture",
+                "severity": "medium",
             })
 
         # 8. Watchlist Cross-Check Signal

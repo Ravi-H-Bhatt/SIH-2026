@@ -7,17 +7,19 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, or_
 
-from app.core.deps import get_db, get_current_user
+from app.core.deps import get_db, get_current_user, require_min_role
 from app.core.config import settings
 from app.models.user import User
 from app.models.scan import ScanRecord
 from app.models.audit_log import AuditLog
+from app.models.extracted_data import ExtractedData
+from app.models.risk_score import RiskScore
 from app.schemas.scan import ScanResponse, ScanListResponse, ScanDecisionRequest
 
 from app.services.geo.geo_reference import geo_reference
-from app.services.pipeline import process_scan_pipeline
+from app.services.pipeline import process_face_only_pipeline, process_scan_pipeline
 from app.services.storage.supabase_storage import StorageError, supabase_storage
 
 router = APIRouter(prefix="/scans", tags=["Scans"])
@@ -69,16 +71,28 @@ def _scan_to_response(scan: ScanRecord, *, include_image_urls: bool = False) -> 
         data.document_image_url = supabase_storage.signed_url(scan.document_image_path)
         data.face_image_url = supabase_storage.signed_url(scan.face_image_path)
 
+    # The ORM relationships are singular (`forgery_result`, `face_result`) but the
+    # schema also exposes plural aliases that the frontend reads. Nothing ever
+    # populated the plurals, so `face_results` was null on every response and the
+    # UI fell back to a hardcoded `?? 0.94`, displaying "94.0% match / PASSED"
+    # for every scan including genuine biometric failures. Mirror them here so
+    # both spellings carry the real result.
+    data.face_results = data.face_result
+    data.forgery_results = data.forgery_result
+
     return data
 
 
 @router.post("", response_model=ScanResponse, status_code=status.HTTP_201_CREATED)
-def create_scan(
-    document_type: str = Form(...),
+def create_scan(  # noqa: PLR0913 - multipart form fields are necessarily positional
+    document_type: str = Form("passport"),
     checkpoint_id: Optional[str] = Form(None),
     notes: Optional[str] = Form(None),
     chip_pki_status: Optional[str] = Form("AUTHENTIC_VALID"),
-    document_image: UploadFile = File(...),
+    # Both images are optional individually, but at least one is required.
+    # Face-only screening exists for travellers presenting no document at all:
+    # the biometric is matched against prior encounters and the watchlist.
+    document_image: Optional[UploadFile] = File(None),
     face_image: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -92,15 +106,37 @@ def create_scan(
     """
     scan_id = uuid.uuid4()
 
-    try:
-        stored_doc = supabase_storage.store_upload(
-            content=document_image.file.read(),
-            filename=document_image.filename or "document.jpg",
-            bucket=settings.STORAGE_DOCUMENT_BUCKET,
-            scan_id=str(scan_id),
+    has_document = document_image is not None and bool(document_image.filename)
+    has_face = face_image is not None and bool(face_image.filename)
+
+    if not has_document and not has_face:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Provide a document image, a face image, or both. A face-only "
+                "submission runs biometric watchlist screening without a document."
+            ),
         )
-    except StorageError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+    # Face-only screening is its own mode — there is no document to OCR, no MRZ
+    # to validate and no chip to verify, so those checks must not be reported as
+    # failures. They simply do not apply.
+    face_only = has_face and not has_document
+    if face_only:
+        document_type = "face_only"
+        chip_pki_status = "NOT_APPLICABLE"
+
+    stored_doc = None
+    if has_document:
+        try:
+            stored_doc = supabase_storage.store_upload(
+                content=document_image.file.read(),
+                filename=document_image.filename or "document.jpg",
+                bucket=settings.STORAGE_DOCUMENT_BUCKET,
+                scan_id=str(scan_id),
+            )
+        except StorageError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
     stored_face = None
     if face_image is not None and face_image.filename:
@@ -112,10 +148,11 @@ def create_scan(
                 scan_id=str(scan_id),
             )
         except StorageError as exc:
-            supabase_storage.cleanup_scratch(stored_doc.local_path)
+            if stored_doc is not None:
+                supabase_storage.cleanup_scratch(stored_doc.local_path)
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
-    # Determine chip PKI status (ID cards do not have ePassport RFID chips)
+    # Determine chip PKI status (ID cards and face-only scans have no chip)
     effective_chip_status = chip_pki_status
     if document_type != "passport":
         effective_chip_status = "NOT_APPLICABLE"
@@ -129,7 +166,7 @@ def create_scan(
         status="pending",
         checkpoint_id=checkpoint_id or settings.CHECKPOINT_NAME,
         officer_id=current_user.id,
-        document_image_path=stored_doc.uri,
+        document_image_path=stored_doc.uri if stored_doc else None,
         face_image_path=stored_face.uri if stored_face else None,
         chip_pki_status=effective_chip_status,
         notes=notes,
@@ -145,8 +182,9 @@ def create_scan(
         details={
             "document_type": document_type,
             "checkpoint_id": scan.checkpoint_id,
-            "storage_backend": stored_doc.backend,
-            "document_object": stored_doc.uri,
+            "mode": "face_only" if face_only else "document",
+            "storage_backend": (stored_doc or stored_face).backend,
+            "document_object": stored_doc.uri if stored_doc else None,
             "face_object": stored_face.uri if stored_face else None,
         },
     )
@@ -154,17 +192,22 @@ def create_scan(
     db.commit()
     db.refresh(scan)
 
-    # Run the screening pipeline against the local scratch copies, then clean up.
+    # Run the appropriate pipeline, then clean up the scratch copies.
     try:
-        scan = process_scan_pipeline(
-            str(scan.id),
-            db,
-            document_local_path=stored_doc.local_path,
-            face_local_path=stored_face.local_path if stored_face else None,
-        )
+        if face_only:
+            scan = process_face_only_pipeline(
+                str(scan.id), db, face_local_path=stored_face.local_path
+            )
+        else:
+            scan = process_scan_pipeline(
+                str(scan.id),
+                db,
+                document_local_path=stored_doc.local_path,
+                face_local_path=stored_face.local_path if stored_face else None,
+            )
     finally:
         supabase_storage.cleanup_scratch(
-            stored_doc.local_path,
+            stored_doc.local_path if stored_doc else None,
             stored_face.local_path if stored_face else None,
         )
 
@@ -179,10 +222,21 @@ def list_scans(
     document_type: Optional[str] = Query(None),
     risk_level: Optional[str] = Query(None),
     decision: Optional[str] = Query(None),
+    search: Optional[str] = Query(
+        None, description="Match against holder name or document number"
+    ),
+    include_images: bool = Query(
+        False,
+        description=(
+            "Mint signed URLs for the document and face image of every row. "
+            "Costs one Supabase round-trip per image, so keep page_size small "
+            "when enabling it (used by the Travellers gallery)."
+        ),
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """List scans with optional filtering and pagination."""
+    """List scans with optional filtering, search and pagination."""
     query = db.query(ScanRecord)
 
     if status:
@@ -192,11 +246,36 @@ def list_scans(
     if decision:
         query = query.filter(ScanRecord.final_decision == decision)
 
+    if search:
+        # ScanRecord has no holder_name / document_number columns — those live
+        # inside ExtractedData.fields, a JSON blob. SQLAlchemy's JSON indexed
+        # access compiles to the right operator per dialect (`->>` on Postgres,
+        # json_extract on SQLite), so this works on Supabase and on the local
+        # SQLite fallback without dialect-specific SQL.
+        like = f"%{search.strip()}%"
+        query = query.join(ExtractedData, ScanRecord.id == ExtractedData.scan_id).filter(
+            or_(
+                ExtractedData.fields["holder_name"].as_string().ilike(like),
+                ExtractedData.fields["document_number"].as_string().ilike(like),
+            )
+        )
+
+    if risk_level:
+        # risk_level lives on the related RiskScore row, not on the scan.
+        query = query.join(RiskScore, ScanRecord.id == RiskScore.scan_id).filter(
+            RiskScore.risk_level == risk_level
+        )
+
     total = query.count()
-    scans = query.order_by(desc(ScanRecord.created_at)).offset((page - 1) * page_size).limit(page_size).all()
+    scans = (
+        query.order_by(desc(ScanRecord.created_at))
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
 
     return ScanListResponse(
-        scans=[_scan_to_response(s) for s in scans],
+        scans=[_scan_to_response(s, include_image_urls=include_images) for s in scans],
         total=total,
         page=page,
         page_size=page_size,
@@ -234,9 +313,12 @@ def make_decision(
     scan_id: str,
     request: ScanDecisionRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    # Clearing or detaining a traveller is the highest-consequence action in the
+    # system. It previously accepted any authenticated user, so an auditor or a
+    # pending-approval account could release someone. Officer rank and above.
+    current_user: User = Depends(require_min_role("officer")),
 ):
-    """Make a final decision on a scan (approve, flag, detain)."""
+    """Make a final decision on a scan (approve, flag, detain). Officer+."""
     scan = db.query(ScanRecord).filter(ScanRecord.id == _parse_uuid(scan_id)).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")

@@ -27,12 +27,56 @@ class Settings(BaseSettings):
     REQUIRE_SUPABASE: bool = True
 
     # JWT Auth
-    SECRET_KEY: str = "sih26188-border-ai-secret-key-change-in-production-2026"
+    #
+    # This default is a DEVELOPMENT placeholder and is rejected at startup when
+    # ENVIRONMENT=production (see `validate_runtime_security`). It used to be a
+    # silent fallback, which meant a deployed instance signed tokens with a value
+    # published in this repo — anyone could mint an admin token.
+    SECRET_KEY: str = "dev-only-insecure-key-override-in-production"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 120
 
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173,http://localhost:8000"
+
+    # -------------------------------------------------------------------------
+    # Google Sign-In (brokered through Supabase Auth)
+    # -------------------------------------------------------------------------
+    # The browser runs the Google OAuth dance against Supabase Auth and receives
+    # a Supabase access token. It posts that to POST /api/v1/auth/google, and the
+    # backend verifies it server-side against Supabase's /auth/v1/user endpoint
+    # before issuing our own application JWT.
+    #
+    # Verifying via Supabase's own endpoint (rather than locally decoding the
+    # token) means we do not have to track whether the project signs with a
+    # shared HS256 secret or a rotating asymmetric key.
+    GOOGLE_AUTH_ENABLED: bool = True
+
+    # Comma-separated list of email domains permitted to sign in with Google.
+    # Empty means any domain may *register*, but the account still lands
+    # unapproved and an admin must grant access. For a real deployment restrict
+    # this to your agency domain, e.g. "nic.in,gov.in".
+    GOOGLE_ALLOWED_EMAIL_DOMAINS: str = ""
+
+    # Role assigned to a brand-new Google account. Never make this "admin".
+    GOOGLE_DEFAULT_ROLE: str = "officer"
+
+    # -------------------------------------------------------------------------
+    # Superadmin allow-list
+    # -------------------------------------------------------------------------
+    # Comma-separated emails that are granted the admin role and approved
+    # automatically, whichever way they sign in (password or Google). This is the
+    # bootstrap owner account so you are never locked out of your own deployment.
+    #
+    # Keep it short and treat it like a credential: anyone who controls one of
+    # these mailboxes controls the system. Everything else must be approved from
+    # the admin console.
+    ADMIN_EMAILS: str = ""
+
+    # Google accounts must be approved by an admin before they can do anything,
+    # independent of AUTO_APPROVE_USERS. Self-service Google sign-in with
+    # auto-approval would let anyone with a Google account into a border system.
+    GOOGLE_REQUIRE_ADMIN_APPROVAL: bool = True
 
     # -------------------------------------------------------------------------
     # Object storage — Supabase Storage is the single source of truth for images.
@@ -117,6 +161,73 @@ class Settings(BaseSettings):
     AUTO_APPROVE_USERS: bool = True
     REQUIRE_ADMIN_APPROVAL: bool = False
 
+    # -------------------------------------------------------------------------
+    # Watchlist / sanctions screening
+    # -------------------------------------------------------------------------
+    OPENSANCTIONS_ENABLED: bool = False
+    OPENSANCTIONS_API_KEY: Optional[str] = None
+    OPENSANCTIONS_API_URL: str = "https://api.opensanctions.org"
+    OPENSANCTIONS_DATASET: str = "default"
+    OPENSANCTIONS_TIMEOUT_SECONDS: float = 12.0
+    # Candidate scores below this are discarded. OpenSanctions returns weak
+    # partial matches by design, and surfacing them would bury real hits.
+    OPENSANCTIONS_MATCH_THRESHOLD: float = 0.70
+
+    SYNTHETIC_WATCHLIST_ENABLED: bool = True
+    INTERPOL_ENABLED: bool = False
+
+    # -------------------------------------------------------------------------
+    # Biometric thresholds
+    # -------------------------------------------------------------------------
+    # These were previously present in .env but declared nowhere, so
+    # pydantic-settings discarded them (extra="ignore") and the services used
+    # hardcoded constants instead. Editing .env had no effect on behaviour.
+    #
+    # ── Biometric thresholds ────────────────────────────────────────────────
+    #
+    # Every threshold below is a RAW SFace cosine similarity in [-1, 1]. The
+    # service reports the raw cosine and compares it directly against these
+    # numbers. There is no rescaling, no calibration curve and no remap.
+    #
+    # History: this used to hold FACE_SIMILARITY_THRESHOLD=0.70 alongside
+    # FACE_CROSS_DOMAIN_COSINE_THRESHOLD=0.30, and face_service mapped any
+    # cosine >= 0.30 onto the range [0.70, 0.99] before comparing it against
+    # 0.70. That made the comparison vacuous — every cosine above 0.30 passed,
+    # and the officer-facing "70.3% vs 70% threshold" readout was arithmetic
+    # applied to itself. An unrelated selfie scored raw 0.307 and cleared.
+    #
+    # FACE_MATCH_COSINE_THRESHOLD: 1:1 verification (document portrait vs live
+    # capture). 0.363 is SFace's published same-domain operating point and is
+    # the floor enforced in code — see face_service.MIN_SAFE_COSINE_THRESHOLD.
+    FACE_MATCH_COSINE_THRESHOLD: float = 0.363
+
+    # 1:N identity-graph / face-search linkage. Deliberately STRICTER than the
+    # 1:1 threshold: a 1:N search over N stored encounters accumulates
+    # false-match probability with N, so the per-comparison bar must be higher
+    # to hold the overall false-link rate down. Previously 0.62 applied to a
+    # (cos+1)/2 rescale, which corresponded to a raw cosine of just 0.24 —
+    # looser than 1:1 despite a comment claiming the opposite.
+    FACE_IDENTITY_MATCH_THRESHOLD: float = 0.50
+
+    # Minimum YuNet detector confidence for a detection to be usable as
+    # evidence. Detections below this are discarded rather than compared.
+    FACE_QUALITY_THRESHOLD: float = 0.6
+
+    # Anti-spoofing: minimum FFT high/low frequency energy ratio and edge
+    # variance for a capture to be accepted as live.
+    LIVENESS_MIN_FREQ_RATIO: float = 0.003
+    LIVENESS_MIN_EDGE_VARIANCE: float = 10.0
+
+    # -------------------------------------------------------------------------
+    # Forensics & validation
+    # -------------------------------------------------------------------------
+    FORENSICS_ELA_QUALITY: int = 95
+    FORENSICS_TAMPERING_THRESHOLD: float = 0.60
+    VALIDATION_STRICT_MODE: bool = True
+    VALIDATION_ICAO_COMPLIANCE: bool = True
+
+    LOG_LEVEL: str = "INFO"
+
     # Admin bootstrap (used by init_admin.py only)
     ADMIN_EMAIL: Optional[str] = None
     ADMIN_PASSWORD: Optional[str] = None
@@ -124,7 +235,69 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins_list(self) -> List[str]:
-        return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
+    @property
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT.strip().lower() in ("production", "prod")
+
+    @property
+    def admin_emails(self) -> List[str]:
+        return [e.strip().lower() for e in self.ADMIN_EMAILS.split(",") if e.strip()]
+
+    def is_superadmin_email(self, email: Optional[str]) -> bool:
+        """True when `email` is on the bootstrap admin allow-list."""
+        if not email:
+            return False
+        return email.strip().lower() in self.admin_emails
+
+    @property
+    def google_allowed_domains(self) -> List[str]:
+        return [
+            d.strip().lower().lstrip("@")
+            for d in self.GOOGLE_ALLOWED_EMAIL_DOMAINS.split(",")
+            if d.strip()
+        ]
+
+    @property
+    def supabase_auth_configured(self) -> bool:
+        """Google sign-in needs the project URL plus the anon key to verify tokens."""
+        return bool(self.SUPABASE_URL and self.SUPABASE_ANON_KEY)
+
+    def validate_runtime_security(self) -> List[str]:
+        """
+        Returns a list of fatal misconfigurations for a production boot.
+
+        Called from main.py. In production these abort startup; in development
+        they are logged as warnings so local work is not blocked.
+        """
+        problems: List[str] = []
+
+        if self.SECRET_KEY == "dev-only-insecure-key-override-in-production":
+            problems.append(
+                "SECRET_KEY is still the development placeholder. Generate one with "
+                "`python -c \"import secrets; print(secrets.token_urlsafe(64))\"` "
+                "and set it in the environment."
+            )
+        elif len(self.SECRET_KEY) < 32:
+            problems.append("SECRET_KEY is shorter than 32 characters.")
+
+        if self.BYPASS_AUTH:
+            problems.append("BYPASS_AUTH=true must never be enabled outside local development.")
+
+        if self.DEBUG:
+            problems.append("DEBUG=true leaks stack traces; set DEBUG=false in production.")
+
+        if any(o == "*" for o in self.cors_origins_list):
+            problems.append("CORS_ORIGINS contains '*', which defeats credentialed CORS.")
+
+        if self.AUTO_APPROVE_USERS:
+            problems.append(
+                "AUTO_APPROVE_USERS=true lets any self-registered account act immediately. "
+                "Set it to false and approve users from the admin console."
+            )
+
+        return problems
 
     @property
     def supabase_project_ref(self) -> Optional[str]:

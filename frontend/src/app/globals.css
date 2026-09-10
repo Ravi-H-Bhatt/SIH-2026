@@ -3,8 +3,6 @@
    Premium dark-mode-first UI with glassmorphism
    =================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-
 /* Tailwind v4. Single import replaces the old @tailwind base/components/utilities
    trio; configuration lives in the @theme block below rather than a JS file. */
 @import "tailwindcss";

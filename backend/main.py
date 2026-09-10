@@ -48,13 +48,59 @@ else:
         "will stay on local disk. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY."
     )
 
+# ── Refuse to boot a production instance with development-grade secrets ──────
+_security_problems = settings.validate_runtime_security()
+if _security_problems:
+    if settings.is_production:
+        for _p in _security_problems:
+            logger.critical("SECURITY: %s", _p)
+        raise SystemExit(
+            "Refusing to start in production with insecure configuration. "
+            "Resolve the SECURITY items above."
+        )
+    for _p in _security_problems:
+        logger.warning("Insecure for production: %s", _p)
+
 app = FastAPI(
     title="Border Document Screening API",
     description="AI-powered document verification, forgery detection, and face matching for border checkpoints.",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    # Interactive docs enumerate every endpoint and schema; keep them off in prod.
+    openapi_url=None if settings.is_production else "/openapi.json",
 )
+
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """
+    Return unhandled server errors as JSON so the browser can actually read them.
+
+    Without this handler, an unhandled exception is turned into a 500 by
+    Starlette's ServerErrorMiddleware, which sits OUTSIDE CORSMiddleware. That
+    response therefore carries no Access-Control-Allow-Origin header, so the
+    browser blocks it and reports a generic network failure — the frontend showed
+    "Failed to fetch" with no indication that the server had actually replied
+    with an error, which made real backend bugs look like connectivity problems.
+
+    Registering the handler here means the response is generated inside the
+    middleware stack and picks up CORS headers on the way out.
+    """
+    logger.error(
+        "Unhandled error on %s %s: %s",
+        request.method, request.url.path, exc, exc_info=True,
+    )
+    detail = (
+        f"{type(exc).__name__}: {exc}"
+        if settings.DEBUG
+        else "Internal server error. Check the server log for details."
+    )
+    return JSONResponse(status_code=500, content={"detail": detail})
+
 
 from app.core.middleware import RateLimitMiddleware
 
@@ -70,15 +116,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from fastapi.staticfiles import StaticFiles
 import os
 
-# Scratch directory for in-flight uploads. Document images themselves live in
-# private Supabase Storage and are served to the browser via signed URLs, so
-# this is only mounted for legacy records created before the storage migration.
-uploads_dir = os.path.abspath(settings.UPLOAD_DIR)
-os.makedirs(uploads_dir, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
+# The scratch directory holds in-flight uploads while the CV/OCR models read
+# them from disk. It is NOT web-exposed.
+#
+# There used to be `app.mount("/uploads", StaticFiles(...))` here, which served
+# that whole directory with no authentication — every traveller's passport scan,
+# selfie and undeleted face crop was downloadable by anyone who could guess or
+# list a filename. Images now reach the browser only as short-lived Supabase
+# signed URLs minted per request in `_scan_to_response`.
+os.makedirs(os.path.abspath(settings.UPLOAD_DIR), exist_ok=True)
 
 # Include API routes
 app.include_router(api_router)

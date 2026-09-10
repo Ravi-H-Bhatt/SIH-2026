@@ -304,7 +304,10 @@ class DemoScenarios:
             expiry_date="351231",  # Valid until 2035
         )
         
-        face_embedding = [0.1 * i + 0.05 * (i % 2) for i in range(512)]  # Simulated 512-d embedding
+        # Synthetic 512-d ramps removed: they are scalar multiples of one
+        # another (pairwise cosine 1.0) and the wrong dimensionality for the
+        # current 128-d SFace model. None is the honest value.
+        face_embedding = None
         
         return {
             "name": "SCENARIO_GENUINE",
@@ -352,7 +355,10 @@ class DemoScenarios:
             expiry_date="281231",
         )
         
-        face_embedding = [0.2 * i for i in range(512)]
+        # Synthetic 512-d ramps removed: they are scalar multiples of one
+        # another (pairwise cosine 1.0) and the wrong dimensionality for the
+        # current 128-d SFace model. None is the honest value.
+        face_embedding = None
         
         return {
             "name": "SCENARIO_FORGED",
@@ -406,8 +412,14 @@ class DemoScenarios:
             expiry_date="321231",
         )
         
-        face_embedding_doc = [0.15 * i for i in range(512)]
-        face_embedding_live = [0.25 * i for i in range(512)]
+        # Synthetic 512-d ramps removed: they are scalar multiples of one
+        # another (pairwise cosine 1.0) and the wrong dimensionality for the
+        # current 128-d SFace model. None is the honest value.
+        face_embedding_doc = None
+        # Synthetic 512-d ramps removed: they are scalar multiples of one
+        # another (pairwise cosine 1.0) and the wrong dimensionality for the
+        # current 128-d SFace model. None is the honest value.
+        face_embedding_live = None
         
         return {
             "name": "SCENARIO_FACE_MISMATCH",
@@ -456,7 +468,10 @@ class DemoScenarios:
             expiry_date="301231",
         )
         
-        face_embedding = [0.12 * i for i in range(512)]
+        # Synthetic 512-d ramps removed: they are scalar multiples of one
+        # another (pairwise cosine 1.0) and the wrong dimensionality for the
+        # current 128-d SFace model. None is the honest value.
+        face_embedding = None
         
         return {
             "name": "SCENARIO_KNOWN_CRIMINAL",
@@ -513,7 +528,10 @@ class DemoScenarios:
             expiry_date="341231",
         )
         
-        face_embedding = [0.18 * i for i in range(512)]
+        # Synthetic 512-d ramps removed: they are scalar multiples of one
+        # another (pairwise cosine 1.0) and the wrong dimensionality for the
+        # current 128-d SFace model. None is the honest value.
+        face_embedding = None
         
         return {
             "name": "SCENARIO_MULTIPLE_IDENTITIES",
@@ -573,7 +591,10 @@ class DemoScenarios:
             expiry_date="240101",  # Expired 1 Jan 2024
         )
         
-        face_embedding = [0.22 * i for i in range(512)]
+        # Synthetic 512-d ramps removed: they are scalar multiples of one
+        # another (pairwise cosine 1.0) and the wrong dimensionality for the
+        # current 128-d SFace model. None is the honest value.
+        face_embedding = None
         
         return {
             "name": "SCENARIO_EXPIRED",
@@ -709,7 +730,9 @@ def seed_demo_scans(session: Session, admin_user: User) -> List[ScanRecord]:
             scan_id=scan.id,
             match_score=scenario.get("face_match_score", 0.0),
             liveness_passed=scenario.get("is_live", True),
-            face_embedding=scenario.get("face_embedding", []),
+            # Default None, not []: an empty list is still a value the gallery
+            # would try to interpret.
+            face_embedding=scenario.get("face_embedding") or None,
             continuity_links=scenario.get("identity_graph_continuity_links", []),
             watchlist_hits=scenario.get("watchlist_hits", []),
         )

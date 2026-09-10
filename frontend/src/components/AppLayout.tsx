@@ -10,16 +10,18 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
 
-  const bypassAuth = process.env.NEXT_PUBLIC_BYPASS_AUTH === "true";
+  // NEXT_PUBLIC_BYPASS_AUTH is gone. It let the whole app render with an
+  // injected fake admin and no backend session at all.
+  const PUBLIC_PATHS = ["/login", "/kiosk", "/landing", "/auth/callback"];
+  const isPublic = PUBLIC_PATHS.includes(pathname);
 
   React.useEffect(() => {
-    // Only redirect to login if bypass is OFF and user is not authenticated
-    if (!bypassAuth && !isLoading && !user && pathname !== "/login" && pathname !== "/kiosk" && pathname !== "/landing") {
-      router.push("/login");
+    if (!isLoading && !user && !isPublic) {
+      router.replace("/login");
     }
-  }, [bypassAuth, isLoading, user, pathname, router]);
+  }, [isLoading, user, isPublic, router]);
 
-  if (pathname === "/login" || pathname === "/kiosk" || pathname === "/landing") {
+  if (isPublic) {
     return <>{children}</>;
   }
 
@@ -34,8 +36,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // In bypass mode, always show content (demo user is injected)
-  if (!bypassAuth && !user) {
+  if (!user) {
     return null;
   }
 
@@ -44,14 +45,62 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     { label: "Supervisor Hub", href: "/supervisor", roles: ["admin", "supervisor"], icon: "👮‍♂️" },
     { label: "Document Scanner", href: "/scanner", roles: ["admin", "officer", "supervisor"], icon: "🔍" },
     { label: "Self-Service Kiosk", href: "/kiosk", roles: ["admin", "officer", "supervisor"], icon: "🛂" },
+    // Biometric identification for travellers presenting no document: the face
+    // is the query, matched 1:N against every stored encounter.
+    { label: "Biometric Identification", href: "/face-search", roles: ["admin", "officer", "supervisor", "investigator"], icon: "🧬" },
+    // Gallery of every screened traveller with their document and face images.
+    { label: "Travellers", href: "/travellers", roles: ["admin", "officer", "supervisor", "investigator"], icon: "👥" },
     { label: "Scan History", href: "/history", roles: ["admin", "officer", "supervisor", "investigator"], icon: "📜" },
     { label: "User Management", href: "/admin/users", roles: ["admin"], icon: "👥" },
     { label: "Audit Logs", href: "/admin/audit", roles: ["admin", "supervisor", "investigator"], icon: "🛡️" },
   ];
 
-  if (!user) return <div>Loading...</div>;
-
   const filteredNav = navItems.filter((item) => item.roles.includes(user.role));
+
+  // Route-level RBAC. Hiding a nav link is presentation, not access control — an
+  // officer could still open /admin/users directly and see the page shell fire
+  // requests. Block the render outright when the current path is not permitted
+  // for this role. The backend independently enforces the same rules.
+  const activeRoute = navItems.find(
+    (item) => item.href !== "/" && pathname.startsWith(item.href)
+  );
+  if (activeRoute && !activeRoute.roles.includes(user.role)) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          minHeight: "100vh",
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: "#0B0F19",
+          padding: "24px",
+        }}
+      >
+        <div style={{ textAlign: "center", maxWidth: "420px" }}>
+          <div style={{ fontSize: "40px", marginBottom: "16px" }}>🔒</div>
+          <h1 style={{ color: "#F8FAFC", fontSize: "20px", margin: "0 0 12px" }}>
+            Access restricted
+          </h1>
+          <p style={{ color: "#94A3B8", fontSize: "14px", margin: "0 0 24px", lineHeight: 1.6 }}>
+            Your role ({user.role}) is not authorised to view this section.
+          </p>
+          <Link
+            href="/"
+            style={{
+              color: "#93C5FD",
+              fontSize: "14px",
+              textDecoration: "none",
+              border: "1px solid rgba(255,255,255,0.15)",
+              padding: "10px 20px",
+              borderRadius: "8px",
+            }}
+          >
+            Return to dashboard
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: "flex", minHeight: "100vh", backgroundColor: "var(--bg-primary)" }}>
