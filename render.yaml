@@ -1,0 +1,67 @@
+# ============================================================================
+# Render Blueprint — SIH 26188 Backend
+# https://render.com/docs/blueprint-spec
+# ============================================================================
+
+services:
+  - type: web
+    name: sih-2026-backend
+    runtime: python
+    region: singapore
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/v1/health
+    plan: free
+    envVars:
+      # ── Supabase ──
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_DB_PASSWORD
+        sync: false
+      - key: SUPABASE_DB_HOST
+        sync: false
+      - key: SUPABASE_DB_PORT
+        value: "5432"
+      - key: SUPABASE_DB_USER
+        value: postgres
+      - key: REQUIRE_SUPABASE
+        value: "true"
+      # ── Security ──
+      - key: SECRET_KEY
+        generateValue: true
+      - key: BYPASS_AUTH
+        value: "false"
+      # ── CORS (update after Vercel deploy) ──
+      - key: CORS_ORIGINS
+        value: https://sih-2026.vercel.app
+      # ── Environment ──
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      # ── Admin ──
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_FULL_NAME
+        value: System Administrator
+      - key: AUTO_APPROVE_USERS
+        value: "false"
+      # ── OCR ──
+      - key: OCR_PROVIDER
+        value: google_vision
+      - key: OCR_FALLBACK_ENABLED
+        value: "true"
+      # ── Storage ──
+      - key: STORAGE_DOCUMENT_BUCKET
+        value: document-images
+      - key: STORAGE_FACE_BUCKET
+        value: face-captures
+      - key: UPLOAD_DIR
+        value: ./uploads
