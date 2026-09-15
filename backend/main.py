@@ -107,10 +107,11 @@ from app.core.middleware import RateLimitMiddleware
 # Rate limiting middleware (120 requests per minute per IP)
 app.add_middleware(RateLimitMiddleware, max_requests=120, window_seconds=60)
 
-# CORS middleware
+# CORS middleware - supports explicit origins and any *.vercel.app domain
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
+    allow_origin_regex=r"^https://.*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
