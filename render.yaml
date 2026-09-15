@@ -14,6 +14,8 @@ services:
     healthCheckPath: /api/v1/health
     plan: free
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
       # ── Supabase ──
       - key: SUPABASE_URL
         sync: false
