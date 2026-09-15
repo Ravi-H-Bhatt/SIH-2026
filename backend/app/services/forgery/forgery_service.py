@@ -12,7 +12,6 @@ import os
 from typing import Dict, Any, List, Tuple, Optional
 from PIL import Image, ImageChops, ImageEnhance, ImageStat, ImageFilter
 import numpy as np
-from scipy import fftpack
 
 try:
     import cv2
@@ -161,9 +160,16 @@ class ForgeryService:
             if h_crop < 64 or w_crop < 64:
                 return 0.0, None
 
-            blocks = arr[:h_crop, :w_crop].reshape(h_crop // 8, 8, w_crop // 8, 8).transpose(0, 2, 1, 3)
-            # Compute 2D DCT across 8x8 blocks
-            dct_blocks = fftpack.dctn(blocks, axes=(-2, -1), norm="ortho")
+            h_blocks, w_blocks = h_crop // 8, w_crop // 8
+            blocks = arr[:h_crop, :w_crop].reshape(h_blocks, 8, w_blocks, 8).transpose(0, 2, 1, 3)
+            # Compute 2D DCT across 8x8 blocks using OpenCV or NumPy
+            if HAS_CV2:
+                dct_blocks = np.empty((h_blocks, w_blocks, 8, 8), dtype=np.float32)
+                for i in range(h_blocks):
+                    for j in range(w_blocks):
+                        dct_blocks[i, j] = cv2.dct(blocks[i, j])
+            else:
+                dct_blocks = np.abs(np.fft.fft2(blocks))
             
             # Extract high-frequency AC coefficients
             ac_energy = np.var(dct_blocks[:, :, 4:, 4:])

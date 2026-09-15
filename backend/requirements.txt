@@ -39,7 +39,6 @@ passlib[bcrypt]==1.7.4
 Pillow==10.4.0
 numpy==1.26.4
 opencv-python-headless==4.10.0.84
-scipy==1.14.1
 
 # ─── Identity graph ───
 networkx==3.3
