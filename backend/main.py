@@ -94,11 +94,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         "Unhandled error on %s %s: %s",
         request.method, request.url.path, exc, exc_info=True,
     )
-    detail = (
-        f"{type(exc).__name__}: {exc}"
-        if settings.DEBUG
-        else "Internal server error. Check the server log for details."
-    )
+    detail = f"{type(exc).__name__}: {exc}"
     return JSONResponse(status_code=500, content={"detail": detail})
 
 
