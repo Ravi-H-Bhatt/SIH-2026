@@ -510,11 +510,34 @@ class OCRService:
             full_text, ocr_lines, engine = self.extract_text(image_path)
 
         if not full_text.strip():
-            raise OCRError(
-                "No text could be extracted from the document image. "
-                "Check image focus/lighting, install a local OCR engine "
-                "(`brew install tesseract`), or configure OCR_PROVIDER=google_vision."
-            )
+            logger.warning("[OCR] No text extracted from document image at %s", image_path)
+            return {
+                "success": False,
+                "document_type": document_type or "unknown",
+                "document_number": "NOT_DETECTED",
+                "holder_name": "UNKNOWN",
+                "surname": "",
+                "given_names": "",
+                "aliases": [],
+                "issuing_country": None,
+                "nationality": None,
+                "date_of_birth": None,
+                "sex": "U",
+                "expiry_date": None,
+                "mrz_valid": False,
+                "mrz_required": True if document_type == "passport" else False,
+                "mrz_lines": [],
+                "check_digits": {
+                    "doc_number_valid": False,
+                    "dob_valid": False,
+                    "expiry_valid": False,
+                },
+                "flags": [
+                    "No text could be extracted from image — OCR failed to detect text layers. Check image lighting, contrast, or OCR provider."
+                ],
+                "raw_ocr_text": "",
+                "ocr_engine": engine,
+            }
 
         full_text_upper = full_text.upper()
 
